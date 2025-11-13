@@ -1,0 +1,36 @@
+# Compiled executables
+nmf_dense_gpu
+nmf_sparse_gpu
+*.o
+*.out
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data files
+data/*.npz
+data/*.txt
+
+# Results
+results/*.csv
+results/*.log
+results/plots/*.png
+results/profiles/*.ncu-rep
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,28 @@
+# Local GPU Configuration
+# Auto-detected on 2025-11-13
+
+GPU_NAME="NVIDIA GeForce RTX 3050 Laptop GPU"
+COMPUTE_CAPABILITY=8.6
+ARCHITECTURE=sm_86
+MEMORY_MB=4096
+CUDA_VERSION=12.3
+
+# Performance Specs (RTX 3050 Laptop)
+# Source: NVIDIA specifications
+PEAK_TFLOPS_FP32=9.1
+PEAK_BANDWIDTH_GBS=192  # GB/s
+TENSOR_CORES=yes
+
+# Recommended Settings for Local Development
+MAX_MATRIX_SIZE=2000     # Due to 4GB memory limit
+RECOMMENDED_TEST_SIZE=1000
+QUICK_TEST_SIZE=500
+
+# Makefile Configuration
+NVCC_ARCH_FLAG=-arch=sm_86
+
+# Notes:
+# - 4GB memory means use smaller matrices than Great Lakes (V100 has 16-32GB)
+# - Good for development and debugging
+# - For final benchmarks, use Great Lakes cluster
+# - This GPU has Tensor Cores (can use FP16 if needed)
