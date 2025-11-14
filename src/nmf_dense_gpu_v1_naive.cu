@@ -19,16 +19,11 @@
  * - Low memory bandwidth utilization (~30-40%)
  * - Low occupancy (~40-60%)
  *
- * Learning Focus:
- * - CUDA memory model basics
- * - cuBLAS API usage
- * - Kernel launch mechanics
- * - Performance baseline establishment
  */
 
-// ============================================================================
-// Naive Element-wise Kernels (No optimization)
-// ============================================================================
+ 
+// Element-wise Kernels (No optimization)
+ 
 
 __global__ void elementwise_multiply_naive(float* A, float* B, float* C, int size) {
     // Simple 1D indexing, no optimization
@@ -47,9 +42,9 @@ __global__ void elementwise_divide_eps_naive(float* A, float* B, float* C, int s
     }
 }
 
-// ============================================================================
+ 
 // Naive NMF Implementation
-// ============================================================================
+ 
 
 void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
                    float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
@@ -278,9 +273,9 @@ void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
     free(h_H);
 }
 
-// ============================================================================
+ 
 // Main Function
-// ============================================================================
+ 
 
 int main(int argc, char** argv) {
     if (argc < 4) {
