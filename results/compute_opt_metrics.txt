@@ -1,0 +1,7 @@
+Version: Compute-Optimized GPU (Level 3)
+Size: 500x500
+Rank: 10
+Iterations: 20
+Time: 35.48 ms
+Bandwidth: 1.20 GB/s
+GFLOPS: 5.89

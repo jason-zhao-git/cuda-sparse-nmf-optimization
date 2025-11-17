@@ -1,0 +1,18 @@
+ ** On entry to cusparseSpMM_bufferSize(): dimension mismatch, matB.num_cols (1000) != matC.num_cols (20) with opB = CUSPARSE_OPERATION_NON_TRANSPOSE
+
+cuSPARSE Error at src/nmf_sparse_gpu_v3_transpose.cu:263 - code 3
+
+╔════════════════════════════════════════════════════════════════╗
+║     SPARSE NMF - TRANSPOSE TRICK (Pure Sparse Approach)       ║
+╚════════════════════════════════════════════════════════════════╝
+
+========================================
+SPARSE NMF - TRANSPOSE TRICK
+========================================
+Matrix: 1000x1000, Rank: 20, Iterations: 50
+Target sparsity: 90.0%
+Approach: Pure sparse (transpose trick for both ops)
+----------------------------------------
+Actual sparsity: 90.0% (100000 non-zeros)
+Memory: CSR + CSC = 1.60 MB (vs 4.00 MB dense)
+----------------------------------------

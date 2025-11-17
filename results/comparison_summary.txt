@@ -1,0 +1,11 @@
+NMF Implementation Comparison (1000×1000, k=20, 90% sparse, 50 iters)
+
+Implementation              Time (ms)    GFLOPS    Bandwidth (GB/s)    Speedup
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Dense Optimized            53.52      77.88       7.92               1.00x (baseline)
+Hybrid Sparse              77.76      4.68        0.51                .68x
+Pure Sparse (transpose)                                  x
+
+CONCLUSION:
+Dense optimized is the clear winner for NMF. cuSPARSE overhead dominates
+any FLOP savings from sparse operations, even at 90% sparsity.

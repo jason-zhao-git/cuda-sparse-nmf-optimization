@@ -1,0 +1,53 @@
+
+╔════════════════════════════════════════════════════════════════╗
+║       CSE587 NMF - LEVEL 2: MEMORY-OPTIMIZED GPU              ║
+╚════════════════════════════════════════════════════════════════╝
+
+Generating random 1000x1000 matrix...
+
+========================================
+LEVEL 2: MEMORY-OPTIMIZED GPU
+========================================
+Matrix: 1000x1000, Rank: 20, Iterations: 50
+Memory Optimizations:
+  - Kernel fusion (2 kernels → 1)
+  - ILP: 4 elements per thread
+  - Coalesced memory access
+----------------------------------------
+
+Kernel Configuration:
+  Block size: 128 threads
+  Grid size H: 40 blocks
+  Grid size W: 40 blocks
+  ILP factor: 4 elements/thread
+  Kernel launches per iter: 2 (vs 4 naive)
+----------------------------------------
+
+Iteration 0
+Iteration 10
+Iteration 20
+Iteration 30
+Iteration 40
+========================================
+MEMORY-OPTIMIZED GPU RESULTS
+========================================
+Time: 53.52 ms
+FLOPS: 77.88 GFLOPS
+Bandwidth: 7.92 GB/s
+Final error: 5.383883e-01
+========================================
+
+Memory Optimization Impact:
+  - Kernel fusion: Reduced memory reads by 20%
+  - ILP: Hides memory latency with computation
+  - Fewer blocks: Less scheduling overhead
+  - Coalesced access: Better cache utilization
+========================================
+
+Saving metrics to results/memory_opt_metrics.txt...
+✓ Metrics saved
+
+Next steps:
+1. Compare with naive: diff results/naive_metrics.txt results/memory_opt_metrics.txt
+2. Move to Level 3: Warp-level optimizations
+

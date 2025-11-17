@@ -45,6 +45,61 @@ void load_dense_matrix(const char* filename, float** data, int* m, int* n) {
     fclose(fp);
 }
 
+void load_matrix_binary(const char* filename, float** data, int* m, int* n) {
+    FILE* fp = fopen(filename, "rb");
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot open file %s\n", filename);
+        exit(EXIT_FAILURE);
+    }
+
+    // Read dimensions (int32)
+    int rows, cols;
+    if (fread(&rows, sizeof(int), 1, fp) != 1 ||
+        fread(&cols, sizeof(int), 1, fp) != 1) {
+        fprintf(stderr, "Error: Failed to read matrix dimensions from %s\n", filename);
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    *m = rows;
+    *n = cols;
+
+    // Allocate memory
+    size_t total_elements = (size_t)rows * cols;
+    *data = (float*)malloc(total_elements * sizeof(float));
+    if (!*data) {
+        fprintf(stderr, "Error: Memory allocation failed for %dx%d matrix\n", rows, cols);
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    // Read data (float32 in row-major order)
+    size_t elements_read = fread(*data, sizeof(float), total_elements, fp);
+    if (elements_read != total_elements) {
+        fprintf(stderr, "Error: Expected %zu elements, read %zu from %s\n",
+                total_elements, elements_read, filename);
+        free(*data);
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    fclose(fp);
+
+    printf("✓ Loaded matrix from %s\n", filename);
+    printf("  Dimensions: %d×%d\n", rows, cols);
+    printf("  Elements: %zu\n", total_elements);
+
+    // Analyze sparsity
+    size_t zeros = 0;
+    for (size_t i = 0; i < total_elements; i++) {
+        if ((*data)[i] == 0.0f) zeros++;
+    }
+    if (zeros > 0) {
+        printf("  Sparsity: %.2f%% (%zu zeros)\n",
+               (float)zeros / total_elements * 100.0f, zeros);
+    }
+}
+
 void load_sparse_matrix_csr(const char* base_filename,
                              float** values, int** colInd, int** rowPtr,
                              int* m, int* n, int* nnz) {

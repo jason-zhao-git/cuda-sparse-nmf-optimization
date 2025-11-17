@@ -4,7 +4,7 @@
 # Compiler and Flags
 # ============================================================================
 
-NVCC = nvcc
+NVCC = /usr/local/cuda/bin/nvcc
 NVCC_FLAGS = -O3 -arch=sm_86 -Xcompiler -Wall
 LIBS = -lcublas -lcusparse
 
@@ -28,21 +28,21 @@ UTILS = $(SRC_DIR)/utils.cu
 .PHONY: all clean test help levels naive memory-opt sparse advanced
 
 # Build all optimization levels
-all: naive sparse
+all: naive memory-opt sparse
 	@echo ""
 	@echo "╔════════════════════════════════════════════════════╗"
 	@echo "║         Build Complete!                            ║"
 	@echo "╚════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Built optimization levels:"
-	@echo "  ✓ naive: Level 1 - Naive baseline"
-	@echo "  ✓ sparse: Level 3 - Sparse implementation"
+	@echo "  ✓ Level 1 (naive): Baseline dense GPU"
+	@echo "  ✓ Level 2 (memory-opt): Optimized dense (fusion + ILP)"
+	@echo "  ✓ Level 3 (sparse): Sparse matrix (CSR format)"
 	@echo ""
-	@echo "TODO (implement these):"
-	@echo "  ○ memory-opt: Level 2 - Shared memory + coalescing"
-	@echo "  ○ advanced: Level 4 - Kernel fusion + adaptive"
-	@echo ""
-	@echo "Quick test: make test-naive"
+	@echo "Quick test:"
+	@echo "  Dense: ./nmf_naive 1000 20 50"
+	@echo "  Dense optimized: ./nmf_memory_opt 1000 20 50"
+	@echo "  Sparse (90%%): ./nmf_sparse 1000 20 0.9 50"
 	@echo ""
 
 # Build levels individually
@@ -92,7 +92,7 @@ nmf_dense_gpu_v2_memory: memory-opt
 sparse: nmf_sparse
 	@echo "✓ Level 3: Sparse implementation built"
 
-nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu.cu $(UTILS)
+nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
 	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
 
 # Backwards compatibility
