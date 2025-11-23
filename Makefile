@@ -25,10 +25,10 @@ UTILS = $(SRC_DIR)/utils.cu
 # Progressive Optimization Levels
 # ============================================================================
 
-.PHONY: all clean test help levels naive memory-opt sparse advanced
+.PHONY: all clean test help levels naive memory-opt compute-opt sparse advanced
 
 # Build all optimization levels
-all: naive memory-opt sparse
+all: naive memory-opt compute-opt sparse
 	@echo ""
 	@echo "╔════════════════════════════════════════════════════╗"
 	@echo "║         Build Complete!                            ║"
@@ -36,13 +36,15 @@ all: naive memory-opt sparse
 	@echo ""
 	@echo "Built optimization levels:"
 	@echo "  ✓ Level 1 (naive): Baseline dense GPU"
-	@echo "  ✓ Level 2 (memory-opt): Optimized dense (fusion + ILP)"
-	@echo "  ✓ Level 3 (sparse): Sparse matrix (CSR format)"
+	@echo "  ✓ Level 2 (memory-opt): Kernel fusion + 4-way ILP"
+	@echo "  ✓ Level 3 (compute-opt): 8-way ILP + block tuning"
+	@echo "  ✓ Sparse variants: CSR format implementations"
 	@echo ""
 	@echo "Quick test:"
-	@echo "  Dense: ./nmf_naive 1000 20 50"
-	@echo "  Dense optimized: ./nmf_memory_opt 1000 20 50"
-	@echo "  Sparse (90%%): ./nmf_sparse 1000 20 0.9 50"
+	@echo "  ./nmf_naive data/dense_1000.bin 20 50"
+	@echo "  ./nmf_memory_opt data/dense_1000.bin 20 50"
+	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50"
+	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50 --tune  # Test block sizes"
 	@echo ""
 
 # Build levels individually
@@ -86,18 +88,37 @@ level2: memory-opt
 nmf_dense_gpu_v2_memory: memory-opt
 
 # ============================================================================
-# Level 3: Sparse Implementation
+# Level 3: Compute Optimization
 # ============================================================================
 
-sparse: nmf_sparse
-	@echo "✓ Level 3: Sparse implementation built"
+compute-opt: nmf_compute_opt
+	@echo "✓ Level 3: Compute-optimized version built"
 
-nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
+nmf_compute_opt: $(SRC_DIR)/nmf_dense_gpu_v3_compute.cu $(UTILS)
 	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
 
 # Backwards compatibility
-level3: sparse
-nmf_sparse_gpu: sparse
+level3: compute-opt
+nmf_dense_gpu_v3_compute: compute-opt
+
+# ============================================================================
+# Sparse Implementations
+# ============================================================================
+
+sparse: nmf_sparse nmf_sparse_transpose nmf_sparse_hybrid
+	@echo "✓ All sparse variants built"
+
+nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu.cu $(UTILS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
+nmf_sparse_transpose: $(SRC_DIR)/nmf_sparse_gpu_v3_transpose.cu $(UTILS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
+nmf_sparse_hybrid: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
+# Backwards compatibility
+nmf_sparse_gpu: nmf_sparse
 
 # ============================================================================
 # Level 4: Advanced (TO BE IMPLEMENTED)
