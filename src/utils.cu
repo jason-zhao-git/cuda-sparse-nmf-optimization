@@ -100,6 +100,38 @@ void load_matrix_binary(const char* filename, float** data, int* m, int* n) {
     }
 }
 
+void save_matrix_binary(const char* filename, const float* data, int m, int n) {
+    FILE* fp = fopen(filename, "wb");
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot create file %s\n", filename);
+        exit(EXIT_FAILURE);
+    }
+
+    // Write dimensions (int32)
+    if (fwrite(&m, sizeof(int), 1, fp) != 1 ||
+        fwrite(&n, sizeof(int), 1, fp) != 1) {
+        fprintf(stderr, "Error: Failed to write matrix dimensions to %s\n", filename);
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    // Write data (float32 in row-major order)
+    size_t total_elements = (size_t)m * n;
+    size_t elements_written = fwrite(data, sizeof(float), total_elements, fp);
+    if (elements_written != total_elements) {
+        fprintf(stderr, "Error: Expected to write %zu elements, wrote %zu to %s\n",
+                total_elements, elements_written, filename);
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    fclose(fp);
+
+    printf("✓ Saved matrix to %s\n", filename);
+    printf("  Dimensions: %d×%d\n", m, n);
+    printf("  Elements: %zu\n", total_elements);
+}
+
 void load_sparse_matrix_csr(const char* base_filename,
                              float** values, int** colInd, int** rowPtr,
                              int* m, int* n, int* nnz) {

@@ -85,6 +85,10 @@ void load_dense_matrix(const char* filename, float** data, int* m, int* n);
 // Format: [int32 rows][int32 cols][float32 data...]
 void load_matrix_binary(const char* filename, float** data, int* m, int* n);
 
+// Save dense matrix to binary file (for visualization)
+// Format: [int32 rows][int32 cols][float32 data...]
+void save_matrix_binary(const char* filename, const float* data, int m, int n);
+
 // Load sparse matrix in CSR format from text files
 void load_sparse_matrix_csr(const char* base_filename,
                              float** values, int** colInd, int** rowPtr,

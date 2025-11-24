@@ -96,6 +96,7 @@ cuda-sparse-nmf-optimization/
 - CUDA Toolkit 11.0+
 - NVIDIA GPU with Compute Capability 6.0+
 - gcc/g++ 7.0+
+- Python 3.7+ with numpy, scipy, PIL, matplotlib (for image datasets)
 
 ### Build
 
@@ -104,33 +105,41 @@ cuda-sparse-nmf-optimization/
 make all
 
 # Or build specific levels
-make level1    # Naive GPU
-make level2    # Memory optimized
-make level3    # Compute optimized
-make sparse    # Sparse implementations
+make naive         # Level 1: Naive GPU
+make memory-opt    # Level 2: Memory optimized
+make compute-opt   # Level 3: Compute optimized
+make sparse        # Sparse implementations
 ```
 
-### Generate Test Data
+### Option A: Test on Real Images (Recommended)
+
+**Demonstrates NMF actually works and can reconstruct images:**
 
 ```bash
-# Dense matrix (1000×1000)
+# 1. Prepare image datasets (downloads/creates 3 test images)
+python3 data/prepare_image_datasets.py --sizes 128 256 512
+
+# 2. Run NMF on images
+./nmf_memory_opt data/images_256.bin 10 100
+
+# 3. Visualize results (shows original vs reconstructed)
+python3 scripts/visualize_nmf_results.py --size 256 --images 3 --rank 10
+```
+
+See **[IMAGE_WORKFLOW.md](IMAGE_WORKFLOW.md)** for complete guide.
+
+### Option B: Test on Synthetic Matrices
+
+**For performance benchmarking:**
+
+```bash
+# Generate random matrix
 python3 data/generate_matrix.py --size 1000 --sparsity 0.0 --output data/dense_1000.bin
 
-# Sparse matrix (1000×1000, 90% zeros)
-python3 data/generate_matrix.py --size 1000 --sparsity 0.9 --output data/sparse_1000.bin
-```
-
-### Run Benchmarks
-
-```bash
-# Level 1 (Naive)
-./nmf_naive data/dense_1000.bin 20 50
-
-# Level 2 (Optimized)
-./nmf_memory_opt data/dense_1000.bin 20 50
-
-# Sparse (on 90% sparse data)
-./nmf_sparse data/sparse_1000.bin 20 50
+# Run benchmarks
+./nmf_naive data/dense_1000.bin 20 50       # Level 1
+./nmf_memory_opt data/dense_1000.bin 20 50  # Level 2
+./nmf_compute_opt data/dense_1000.bin 20 50 # Level 3
 ```
 
 ## Key Optimizations (Level 1 → Level 2)
@@ -178,10 +187,15 @@ Results consistent across both architectures.
 
 ## Documentation
 
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Detailed technical implementation
+### Technical Documentation
+- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Detailed technical implementation of all levels
 - **[FINAL_COMPREHENSIVE_ANALYSIS.md](FINAL_COMPREHENSIVE_ANALYSIS.md)** - Complete performance analysis
-- **[BENCHMARKS.md](BENCHMARKS.md)** - Fair benchmarking methodology (renamed from FAIR_BENCHMARK_RESULTS.md)
-- **[data/README.md](data/README.md)** - Data generation module
+- **[BENCHMARKS.md](BENCHMARKS.md)** - Fair benchmarking methodology
+
+### Workflow Guides
+- **[IMAGE_WORKFLOW.md](IMAGE_WORKFLOW.md)** - Complete guide for testing on real images
+- **[PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)** - Project status and cleanup summary
+- **[data/README.md](data/README.md)** - Data generation module reference
 
 ## Conclusions
 
