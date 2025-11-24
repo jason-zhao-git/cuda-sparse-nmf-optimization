@@ -230,6 +230,11 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
 
+    // Save W, H matrices for visualization
+    printf("\nSaving results for visualization...\n");
+    save_matrix_binary("results/W_matrix.bin", h_W, m, k);
+    save_matrix_binary("results/H_matrix.bin", h_H, k, n);
+
 
     // Calculate metrics
 
