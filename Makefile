@@ -154,8 +154,16 @@ nmf_hals_cpu: $(SRC_DIR)/hals/nmf_hals_cpu.cpp
 	@echo "Building HALS CPU baseline (C++ with column-major indexing)..."
 	g++ -std=c++11 -O3 -o $@ $(SRC_DIR)/hals/nmf_hals_cpu.cpp -lm
 
+hals-gpu-strict: nmf_hals_gpu_strict
+	@echo "✓ HALS GPU Level 1: Strict single-column parallelism built"
+
+nmf_hals_gpu_strict: $(SRC_DIR)/hals/nmf_hals_gpu_v1_strict.cu $(UTILS)
+	@echo "Building HALS GPU Level 1 (strict Gauss-Seidel)..."
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
 # Backwards compatibility
 hals: hals-cpu
+hals-gpu: hals-gpu-strict
 
 # ============================================================================
 # Original simple targets (for backward compatibility)
@@ -270,7 +278,7 @@ clean:
 	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
 	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
-	rm -f nmf_hals_cpu  # HALS CPU baseline
+	rm -f nmf_hals_cpu nmf_hals_gpu_strict  # HALS implementations
 	rm -f *.o
 	@echo "✓ Cleaned executables"
 
