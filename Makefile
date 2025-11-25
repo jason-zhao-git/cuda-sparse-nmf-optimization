@@ -57,7 +57,7 @@ levels: all
 naive: nmf_naive
 	@echo "✓ Level 1: Naive baseline built"
 
-nmf_naive: $(SRC_DIR)/nmf_dense_gpu_v1_naive.cu $(UTILS)
+nmf_naive: $(SRC_DIR)/mu/nmf_dense_gpu_v1_naive.cu $(UTILS)
 	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
 
 # Backwards compatibility
@@ -71,9 +71,9 @@ nmf_dense_gpu_v1_naive: naive
 memory-opt: nmf_memory_opt
 	@echo "✓ Level 2: Memory-optimized version built"
 
-nmf_memory_opt: $(SRC_DIR)/nmf_dense_gpu_v2_memory.cu $(UTILS)
+nmf_memory_opt: $(SRC_DIR)/mu/nmf_dense_gpu_v2_memory.cu $(UTILS)
 	@echo "Building Level 2: Memory optimization..."
-	@if [ ! -f $(SRC_DIR)/nmf_dense_gpu_v2_memory.cu ]; then \
+	@if [ ! -f $(SRC_DIR)/mu/nmf_dense_gpu_v2_memory.cu ]; then \
 		echo "⚠ Level 2 source not yet implemented"; \
 		echo "  Copy v1_naive.cu to v2_memory.cu and add:"; \
 		echo "  - Tiled matrix multiply with shared memory"; \
@@ -94,7 +94,7 @@ nmf_dense_gpu_v2_memory: memory-opt
 compute-opt: nmf_compute_opt
 	@echo "✓ Level 3: Compute-optimized version built"
 
-nmf_compute_opt: $(SRC_DIR)/nmf_dense_gpu_v3_compute.cu $(UTILS)
+nmf_compute_opt: $(SRC_DIR)/mu/nmf_dense_gpu_v3_compute.cu $(UTILS)
 	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
 
 # Backwards compatibility
@@ -127,7 +127,7 @@ nmf_sparse_gpu: nmf_sparse
 multigpu: nmf_multigpu
 	@echo "✓ Level 4: Multi-GPU version built"
 
-nmf_multigpu: $(SRC_DIR)/nmf_dense_gpu_v4_multigpu.cu $(UTILS)
+nmf_multigpu: $(SRC_DIR)/mu/nmf_dense_gpu_v4_multigpu.cu $(UTILS)
 	@echo "Building Level 4: Multi-GPU with OpenMP..."
 	$(NVCC) $(NVCC_FLAGS) -Xcompiler -fopenmp $^ -o $@ $(LIBS)
 
@@ -142,6 +142,20 @@ nmf_sparse_gpu_v2: $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu $(UTILS)
 	else \
 		echo "⚠ Optimized sparse version not yet implemented"; \
 	fi
+
+# ============================================================================
+# HALS Implementations
+# ============================================================================
+
+hals-cpu: nmf_hals_cpu
+	@echo "✓ HALS CPU: Sequential baseline built"
+
+nmf_hals_cpu: $(SRC_DIR)/hals/nmf_hals_cpu.cpp
+	@echo "Building HALS CPU baseline (C++ with column-major indexing)..."
+	g++ -std=c++11 -O3 -o $@ $(SRC_DIR)/hals/nmf_hals_cpu.cpp -lm
+
+# Backwards compatibility
+hals: hals-cpu
 
 # ============================================================================
 # Original simple targets (for backward compatibility)
@@ -256,6 +270,7 @@ clean:
 	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
 	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
+	rm -f nmf_hals_cpu  # HALS CPU baseline
 	rm -f *.o
 	@echo "✓ Cleaned executables"
 
