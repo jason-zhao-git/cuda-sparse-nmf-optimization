@@ -121,27 +121,20 @@ nmf_sparse_hybrid: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
 nmf_sparse_gpu: nmf_sparse
 
 # ============================================================================
-# Level 4: Advanced (TO BE IMPLEMENTED)
+# Level 4: Multi-GPU with OpenMP
 # ============================================================================
 
-advanced: nmf_advanced
-	@echo "✓ Level 4: Advanced version built"
+multigpu: nmf_multigpu
+	@echo "✓ Level 4: Multi-GPU version built"
 
-nmf_advanced: $(SRC_DIR)/nmf_advanced.cu $(UTILS)
-	@echo "Building Level 4: Advanced optimizations..."
-	@if [ ! -f $(SRC_DIR)/nmf_advanced.cu ]; then \
-		echo "⚠ Level 4 source not yet implemented"; \
-		echo "  Implement advanced optimizations:"; \
-		echo "  - Kernel fusion"; \
-		echo "  - Adaptive sparse/dense switching"; \
-		echo "  - Mixed precision exploration"; \
-		exit 1; \
-	fi
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+nmf_multigpu: $(SRC_DIR)/nmf_dense_gpu_v4_multigpu.cu $(UTILS)
+	@echo "Building Level 4: Multi-GPU with OpenMP..."
+	$(NVCC) $(NVCC_FLAGS) -Xcompiler -fopenmp $^ -o $@ $(LIBS)
 
 # Backwards compatibility
-level4: advanced
-nmf_advanced_gpu: advanced
+level4: multigpu
+advanced: multigpu
+nmf_advanced: multigpu
 
 nmf_sparse_gpu_v2: $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu $(UTILS)
 	@if [ -f $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu ]; then \
@@ -260,9 +253,9 @@ analyze:
 # ============================================================================
 
 clean:
-	rm -f nmf_naive nmf_memory_opt nmf_sparse nmf_advanced
+	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
-	rm -f nmf_dense_gpu  # Alias
+	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
 	rm -f *.o
 	@echo "✓ Cleaned executables"
 

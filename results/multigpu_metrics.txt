@@ -1,0 +1,8 @@
+Version: Multi-GPU (Level 4)
+Size: 1000x1000
+Rank: 20
+Iterations: 50
+GPUs: 1
+Time: 68.66 ms
+Bandwidth: 6.18 GB/s
+GFLOPS: 60.71
