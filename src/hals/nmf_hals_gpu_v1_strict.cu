@@ -1,22 +1,48 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 /*
  * GPU HALS NMF - LEVEL 1: STRICT SINGLE-COLUMN PARALLELISM
  *
  * Purpose: Implement strict Gauss-Seidel HALS on GPU with single-column updates
  *
- * Strategy:
- * - Process one column at a time (sequential in features)
- * - Parallelize across rows/samples (m-way parallelism)
- * - Maintain strict dependencies: column j reads updated columns 0..j-1
- * - Use float4 ILP for memory efficiency
+ * Algorithm: HALS (Hierarchical Alternating Least Squares)
+ * =========================================================
+ * HALS solves NMF by updating one feature at a time using closed-form solutions.
+ * Given X ≈ W × H where X(m×n), W(m×k), H(k×n):
  *
- * Expected:
- * - Convergence: ~10-15 iterations (same as CPU)
+ * For H update (row f, all samples j):
+ *   H[f,j] = max(ε, H[f,j] + (Num_H[f,j] - Σₗ Denom_H[f,l]·H[l,j]) / Denom_H[f,f])
+ *   where: Num_H = WᵀX (k×n), Denom_H = WᵀW (k×k)
+ *
+ * For W update (column f, all rows i):
+ *   W[i,f] = max(ε, W[i,f] + (Num_W[i,f] - Σₗ W[i,l]·Denom_W[l,f]) / Denom_W[f,f])
+ *   where: Num_W = XHᵀ (m×k), Denom_W = HHᵀ (k×k)
+ *   Then normalize: W[:,f] /= ||W[:,f]||₂
+ *
+ * Gauss-Seidel Property:
+ * - Features updated sequentially (f = 0, 1, ..., k-1)
+ * - Feature f sees updated values from features 0..f-1
+ * - Leads to faster convergence than Jacobi (all features at once)
+ *
+ * Parallelization Strategy (Level 1 - Strict):
+ * =============================================
+ * - Sequential across features: f = 0, 1, ..., k-1 (maintains Gauss-Seidel)
+ * - Parallel within each feature:
+ *   - H update: parallelize across n samples (each thread handles 4 samples)
+ *   - W update: parallelize across m rows (each thread handles 4 rows)
+ * - Synchronization: cudaDeviceSynchronize() after each feature
+ *
+ * Memory Layout: Column-major (for cuBLAS compatibility)
+ * - W[i,f] at position f*m + i
+ * - H[f,j] at position j*k + f
+ *
+ * Expected Performance:
+ * - Convergence: ~10-15 iterations (same as CPU HALS)
  * - Speedup: 5-10× over CPU (memory-bandwidth limited)
- * - Exact HALS algorithm (no approximations)
+ * - Bottleneck: Sequential feature updates, sync overhead
  */
 
 // ============================================================================
@@ -24,15 +50,27 @@
 // ============================================================================
 
 /*
- * Kernel: Update single column of W (Strict HALS)
+ * Kernel: Update single column of W (feature f)
  *
- * Updates column target_col of W using strict Gauss-Seidel:
- * W[:,j] = W[:,j] + (Numerator[:,j] - W × Denom[:,j]) / Denom[j,j]
+ * HALS W Update Formula:
+ *   W[i,f] = max(ε, W[i,f] + (Num[i,f] - interaction) / Denom[f,f])
+ *   where interaction = Σₗ W[i,l] · Denom[l,f] = (W × Denom)[i,f]
  *
- * Parallelism: Rows (m dimension)
- * ILP: Each thread processes 4 consecutive rows using float4
+ * Parameters:
+ *   - W: m×k matrix (column-major), updated in-place
+ *   - Numerator: m×k matrix = X × Hᵀ (precomputed)
+ *   - Denom: k×k matrix = H × Hᵀ (precomputed)
+ *   - target_col: feature index f (0 to k-1)
  *
- * Memory pattern: Non-coalesced row reads (inherent to algorithm)
+ * Parallelization:
+ *   - Each thread updates 4 consecutive rows of column f
+ *   - Total threads needed: ceil(m/4)
+ *   - All threads work on the SAME column (feature f)
+ *
+ * Memory Access (column-major):
+ *   - W[i,f] at W[f*m + i] - coalesced writes within column
+ *   - W[i,l] at W[l*m + i] - strided reads across columns (for interaction)
+ *   - Denom[l,f] at Denom[f*k + l]
  */
 __global__ void update_W_column_strict_hals(
     float* W,              // m × k (column-major, read AND write)
@@ -114,13 +152,29 @@ __global__ void update_W_column_strict_hals(
 }
 
 /*
- * Kernel: Update single column of H (Strict HALS)
+ * Kernel: Update single row of H (feature f)
  *
- * Updates column target_col of H using strict Gauss-Seidel:
- * H[:,j] = H[:,j] + (Numerator[:,j] - H × Denom[:,j]) / Denom[j,j]
+ * HALS H Update Formula:
+ *   H[f,j] = max(ε, H[f,j] + (Num[f,j] - interaction) / Denom[f,f])
+ *   where interaction = Σₗ Denom[f,l] · H[l,j] = (Denom × H)[f,j]
  *
- * Note: H is k×n, so "column" target_col has k elements (features)
- * We parallelize across the n dimension (samples)
+ * Parameters:
+ *   - H: k×n matrix (column-major), updated in-place
+ *   - Numerator: k×n matrix = Wᵀ × X (precomputed)
+ *   - Denom: k×k matrix = Wᵀ × W (precomputed)
+ *   - target_feature: feature index f (0 to k-1)
+ *
+ * Parallelization:
+ *   - Each thread updates 4 consecutive samples for row f
+ *   - Total threads needed: ceil(n/4)
+ *   - All threads work on the SAME row (feature f)
+ *
+ * Memory Access (column-major):
+ *   - H[f,j] at H[j*k + f] - strided access (one element per column)
+ *   - H[l,j] at H[j*k + l] - reading full column for interaction
+ *   - Denom[f,l] at Denom[l*k + f] (symmetric, so same as Denom[l,f])
+ *
+ * Note: Variable named target_col but actually refers to target row/feature
  */
 __global__ void update_H_column_strict_hals(
     float* H,              // k × n (column-major, read AND write)
@@ -247,11 +301,54 @@ __global__ void normalize_W_column(
 }
 
 // ============================================================================
+// ERROR COMPUTATION (Column-Major)
+// ============================================================================
+
+/*
+ * Compute relative reconstruction error: ||X - WH|| / ||X||
+ *
+ * IMPORTANT: This function assumes COLUMN-MAJOR storage for W and H
+ * - W is m×k: W[i,f] at position f*m + i
+ * - H is k×n: H[f,j] at position j*k + f
+ * - X is m×n: X[i,j] at position j*m + i (column-major)
+ *
+ * The utils.h version assumes row-major, which gives wrong results!
+ */
+float compute_error_column_major(const float* X, const float* W, const float* H,
+                                  int m, int n, int k) {
+    double norm_diff_sq = 0.0;
+    double norm_X_sq = 0.0;
+
+    // Compute ||X - WH||² and ||X||²
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < m; i++) {
+            // X[i,j] in column-major: j*m + i
+            float x_val = X[j * m + i];
+
+            // Compute (WH)[i,j] = Σ_f W[i,f] * H[f,j]
+            float wh_val = 0.0f;
+            for (int f = 0; f < k; f++) {
+                // W[i,f] in column-major: f*m + i
+                // H[f,j] in column-major: j*k + f
+                wh_val += W[f * m + i] * H[j * k + f];
+            }
+
+            float diff = x_val - wh_val;
+            norm_diff_sq += diff * diff;
+            norm_X_sq += x_val * x_val;
+        }
+    }
+
+    return (float)(sqrt(norm_diff_sq) / sqrt(norm_X_sq));
+}
+
+// ============================================================================
 // HOST FUNCTION
 // ============================================================================
 
 void nmf_hals_gpu_strict(float* h_X, int m, int n, int k, int max_iter,
-                         float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                         float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                         float* final_error) {
 
     printf("========================================\n");
     printf("GPU HALS - LEVEL 1: STRICT PARALLELISM\n");
@@ -396,8 +493,10 @@ void nmf_hals_gpu_strict(float* h_X, int m, int n, int k, int max_iter,
     save_matrix_binary("results/W_matrix_hals_gpu.bin", h_W, m, k);
     save_matrix_binary("results/H_matrix_hals_gpu.bin", h_H, k, n);
 
-    // Calculate metrics
-    float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+    // Calculate metrics using column-major error computation
+    // NOTE: compute_relative_error_dense from utils.h assumes ROW-MAJOR,
+    // but our matrices are COLUMN-MAJOR. Must use our own function!
+    float error = compute_error_column_major(h_X, h_W, h_H, m, n, k);
 
     // Estimate FLOPS (rough approximation)
     long long flops_per_iter = 0;
@@ -438,6 +537,7 @@ void nmf_hals_gpu_strict(float* h_X, int m, int n, int k, int max_iter,
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
     // Cleanup
     CUBLAS_CHECK(cublasDestroy(handle));
@@ -479,8 +579,8 @@ int main(int argc, char** argv) {
     printf("\n");
 
     // Run GPU HALS
-    float time_ms, bandwidth_gbps, gflops;
-    nmf_hals_gpu_strict(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops);
+    float time_ms, bandwidth_gbps, gflops, error;
+    nmf_hals_gpu_strict(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops, &error);
 
     // Save metrics
     printf("\nSaving metrics to results/hals_gpu_strict_metrics.txt...\n");
@@ -491,6 +591,8 @@ int main(int argc, char** argv) {
         fprintf(fp, "Rank: %d\n", k);
         fprintf(fp, "Iterations: %d\n", max_iter);
         fprintf(fp, "Time: %.2f ms\n", time_ms);
+        fprintf(fp, "Time per iteration: %.2f ms\n", time_ms / max_iter);
+        fprintf(fp, "Final error: %e\n", error);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
         fprintf(fp, "\nAlgorithm: Strict HALS (Gauss-Seidel)\n");

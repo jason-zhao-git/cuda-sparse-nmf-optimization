@@ -32,12 +32,15 @@ This project implements and compares two NMF algorithms on GPU:
 
 *Theoretical speedup for 2 GPUs (91% efficiency)
 
-### HALS - Tiled Batching Parallelization
+### HALS - GPU Parallelization Strategies
 
-| Level | Approach | Convergence | Implementation | Challenge |
-|-------|----------|-------------|----------------|-----------|
-| **Sequential** | CPU baseline | 40 iters | Gauss-Seidel updates | Inherently sequential |
-| **Tiled (T=4-10)** | GPU parallel | 45-55 iters | Parallel tiles with stale dependencies | Convergence vs parallelism tradeoff |
+| Level | Approach | Time (ms) | Error | Speedup | Implementation |
+|-------|----------|-----------|-------|---------|----------------|
+| **CPU Baseline** | Sequential Gauss-Seidel | 106.3 | 0.487 | 1.0x | Strict column-by-column |
+| **GPU Level 1** | Strict parallelism | 95.8 | 0.487 | 1.1x | Row-parallel, column-sequential |
+| **GPU Level 2** | Block-parallel + shuffle | **54.0** | 0.487 | **1.97x** | CUDA streams + random shuffling |
+
+*Results on 1000×1000 matrix, k=20, 15 iterations*
 
 ### Sparse Implementations (Comparative Study)
 
@@ -105,19 +108,22 @@ For each column j = 0 to k-1:    H[:,j] = H[:,j] + WtA[j,:] - H × WtW[:,j]  (us
 - ❌ **Sequential dependencies**: Column j+1 depends on updated column j (Gauss-Seidel)
 - ❌ **GPU-hostile**: Inherently sequential updates
 
-**Key Challenge:** Breaking sequential dependencies via **tiled batching**
+**Key Challenge:** Breaking sequential dependencies via **block-parallel with random shuffling**
 
-### Tiled Batching Solution
+### Block-Parallel Solution with Random Shuffling
 ```
 Instead of: for j = 0 to k-1: update H[:,j]  (sequential)
-Do this:    for tile = 0 to k step T:
-              parallel_for j in [tile, tile+T): update H[:,j]  (accept stale deps)
+Do this:    shuffle features randomly into blocks
+            for each block (in parallel via CUDA streams):
+              for j in block: update H[:,j]  (sequential within block)
 ```
 
-**Tradeoff:**
-- T=1: Exact HALS (fully sequential, 40 iters)
-- T=4-10: **Optimal balance** (4-10× parallelism, 45-55 iters)
-- T=k: Maximum parallelism (converges to MU, 200+ iters)
+**Key Insight: Random Shuffling**
+- Fixed groupings create systematic bias (feature pairs never interact correctly)
+- Random shuffling each iteration ensures all feature pairs eventually see updated values
+- Similar to stochastic mini-batching in SGD
+
+**Result:** 1.97x speedup with identical error (0.487)
 
 ## Repository Structure
 
@@ -136,9 +142,9 @@ MU_Parallel/
 │   │   └── nmf_dense_gpu_v4_multigpu.cu# Level 4: Multi-GPU with OpenMP
 │   │
 │   ├── hals/                           # HALS implementations
-│   │   ├── nmf_hals_cpu.cpp            # Sequential CPU baseline
-│   │   ├── nmf_hals_gpu_v1_naive.cu    # Basic GPU implementation
-│   │   └── nmf_hals_gpu_v2_tiled.cu    # Tiled batching (T=4-10)
+│   │   ├── nmf_hals_cpu.cpp            # Sequential CPU baseline (Gauss-Seidel)
+│   │   ├── nmf_hals_gpu_v1_strict.cu   # Level 1: Strict single-column parallelism
+│   │   └── nmf_hals_gpu_v2_block.cu    # Level 2: Block-parallel + random shuffling
 │   │
 │   ├── nmf_cpu.py                      # NumPy baseline
 │   ├── nmf_sparse_gpu_v3.cu            # Sparse: Hybrid cuBLAS/cuSPARSE
@@ -173,8 +179,9 @@ make compute-opt   # MU Level 3: 8-way ILP + CUDA streams
 make multigpu      # MU Level 4: Multi-GPU with OpenMP
 
 # Build HALS implementations
-make hals-cpu      # HALS: Sequential CPU baseline
-make hals-gpu      # HALS: GPU with tiled batching (coming soon)
+make hals-cpu         # HALS: Sequential CPU baseline
+make hals-gpu-strict  # HALS Level 1: Strict Gauss-Seidel (single-column parallel)
+make hals-gpu-block   # HALS Level 2: Block-parallel + random shuffling (1.97x speedup)
 
 # Build all
 make all           # Builds MU + sparse implementations

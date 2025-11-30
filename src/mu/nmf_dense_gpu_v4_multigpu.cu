@@ -47,6 +47,10 @@ struct GPUContext {
     float *d_temp_H;       // Temporary for H update [k × n_local]
     float *d_temp_W;       // Temporary for W update [m × k]
 
+    // Pre-allocated buffers for global reduced results (avoid malloc in loop!)
+    float *d_HHt_global;   // Global reduced HHt [k × k]
+    float *d_XHt_global;   // Global reduced XHt [m × k]
+
     // cuBLAS handle
     cublasHandle_t cublas_handle;
 
@@ -143,6 +147,10 @@ void init_gpu_context(GPUContext* ctx, int gpu_id, int m, int n, int k,
     CUDA_CHECK(cudaMalloc(&ctx->d_temp_H, k * n_local * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ctx->d_temp_W, m * k * sizeof(float)));
 
+    // Pre-allocate buffers for global reduced results (avoid malloc in iteration loop!)
+    CUDA_CHECK(cudaMalloc(&ctx->d_HHt_global, k * k * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&ctx->d_XHt_global, m * k * sizeof(float)));
+
     // Allocate pinned memory for fast transfers
     CUDA_CHECK(cudaMallocHost(&ctx->h_HHt_pinned, k * k * sizeof(float)));
     CUDA_CHECK(cudaMallocHost(&ctx->h_XHt_pinned, m * k * sizeof(float)));
@@ -187,6 +195,8 @@ void cleanup_gpu_context(GPUContext* ctx) {
     cudaFree(ctx->d_XHt);
     cudaFree(ctx->d_temp_H);
     cudaFree(ctx->d_temp_W);
+    cudaFree(ctx->d_HHt_global);
+    cudaFree(ctx->d_XHt_global);
 
     cudaFreeHost(ctx->h_HHt_pinned);
     cudaFreeHost(ctx->h_XHt_pinned);
@@ -195,7 +205,8 @@ void cleanup_gpu_context(GPUContext* ctx) {
 
 // Multi-GPU NMF Implementation
 void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
-                  float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                  float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                  float* final_error) {
 
     printf("========================================\n");
     printf("LEVEL 4: MULTI-GPU IMPLEMENTATION\n");
@@ -358,27 +369,21 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
 
             int grid_size_W = ((m * k) + (128 * 8) - 1) / (128 * 8);
 
-            // Copy reduced HHt and XHt to device
-            float *d_HHt_global, *d_XHt_global;
-            CUDA_CHECK(cudaMalloc(&d_HHt_global, k * k * sizeof(float)));
-            CUDA_CHECK(cudaMalloc(&d_XHt_global, m * k * sizeof(float)));
-            CUDA_CHECK(cudaMemcpy(d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
-            CUDA_CHECK(cudaMemcpy(d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
+            // Copy reduced HHt and XHt to pre-allocated device buffers (no malloc in loop!)
+            CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
 
             // temp_W = W × HHt_global
             CUBLAS_CHECK(cublasSgemm(ctx->cublas_handle,
                                      CUBLAS_OP_N, CUBLAS_OP_N,
                                      m, k, k,
-                                     &alpha, ctx->d_W, m, d_HHt_global, k,
+                                     &alpha, ctx->d_W, m, ctx->d_HHt_global, k,
                                      &beta, ctx->d_temp_W, m));
 
             // W = W .* XHt_global ./ (temp_W + eps)
             elementwise_multiply_divide_fused_ilp8<<<grid_size_W, 128>>>(
-                ctx->d_W, d_XHt_global, ctx->d_temp_W, m * k, 1e-10f
+                ctx->d_W, ctx->d_XHt_global, ctx->d_temp_W, m * k, 1e-10f
             );
-
-            cudaFree(d_HHt_global);
-            cudaFree(d_XHt_global);
         }
 
         // Synchronize all GPUs after W update
@@ -456,6 +461,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
     // Cleanup
     for (int gpu = 0; gpu < num_gpus; gpu++) {
@@ -496,8 +502,8 @@ int main(int argc, char** argv) {
     printf("\n");
 
     // Run multi-GPU NMF
-    float time_ms, bandwidth_gbps, gflops;
-    nmf_multigpu(h_X, m, n, k, max_iter, num_gpus, &time_ms, &bandwidth_gbps, &gflops);
+    float time_ms, bandwidth_gbps, gflops, error;
+    nmf_multigpu(h_X, m, n, k, max_iter, num_gpus, &time_ms, &bandwidth_gbps, &gflops, &error);
 
     // Save metrics
     printf("\nSaving metrics to results/multigpu_metrics.txt...\n");
@@ -509,6 +515,7 @@ int main(int argc, char** argv) {
         fprintf(fp, "Iterations: %d\n", max_iter);
         fprintf(fp, "GPUs: %d\n", num_gpus);
         fprintf(fp, "Time: %.2f ms\n", time_ms);
+        fprintf(fp, "Final error: %.6e\n", error);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
         fclose(fp);

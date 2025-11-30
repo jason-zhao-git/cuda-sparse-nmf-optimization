@@ -89,56 +89,75 @@ H_new = H_old + WtA - H_old × WtW  // Fully parallel
 
 ---
 
-## Tiled Batching Solution
+## Block-Parallel Solution with Random Shuffling
 
-### Core Idea: Controlled Staleness
+### Core Idea: Random Feature Mixing
 
-Accept "slightly stale" dependencies within tiles to gain parallelism:
+Instead of fixed groupings (which create systematic bias), randomly shuffle features into blocks each iteration:
 
 ```
 Instead of: for j = 0 to k-1: update H[:,j]          # Fully sequential
-Do this:    for tile_start = 0 to k step T:          # T tiles
-                parallel_for j in [tile_start, tile_start+T):
-                    update H[:,j]                     # T-way parallelism
+Do this:    for each iteration:
+                shuffle features randomly into blocks
+                for each block (in parallel via CUDA streams):
+                    for j in block: update H[:,j]    # Sequential within block
 ```
 
-**Within each tile:** Update T columns in parallel using H from **start of iteration**
-**Between tiles:** Process tiles sequentially to preserve some dependency structure
+**Within each block:** Update features sequentially (Gauss-Seidel)
+**Between blocks:** Update blocks in parallel via CUDA streams (Jacobi-like)
+**Critical:** Random shuffling ensures all feature pairs eventually see updated values
 
-### Algorithm: Tiled HALS
+### Why Random Shuffling is Essential
+
+**Problem with Fixed Groupings:**
+```
+Fixed blocks: Block 0 = [0,1,2,3,4], Block 1 = [5,6,7,8,9], ...
+Feature 4 NEVER sees updated feature 5 before updating (systematic bias)
+```
+
+**Random Shuffling Solution:**
+```
+Iter 0: Block 0 = [3,17,8,1,12], Block 1 = [5,19,0,14,7], ...
+Iter 1: Block 0 = [11,2,18,6,9], Block 1 = [4,15,1,13,8], ...
+Over iterations, all feature pairs interact in both orders!
+```
+
+### Algorithm: Block-Parallel HALS
 
 ```
-function HALS_Tiled(X, W, H, k, T):
+function HALS_BlockParallel(X, W, H, k, block_size):
+    num_blocks = ceil(k / block_size)
+    create CUDA streams[num_blocks]
+
     for iter = 1 to max_iters:
-        // H update
+        // === Random shuffle features each iteration ===
+        perm = Fisher_Yates_Shuffle([0, 1, ..., k-1], seed=42+iter)
+
+        // H update precompute
         WtA = W^T × X
         WtW = W^T × W
 
-        for tile_start = 0 to k step T:
-            tile_end = min(tile_start + T, k)
+        // H update - blocks in parallel, features within block sequential
+        for block = 0 to num_blocks-1:           // PARALLEL (streams)
+            for local_f = 0 to block_size-1:     // SEQUENTIAL within block
+                f = perm[block * block_size + local_f]
+                update_H_column<<<stream[block]>>>(f)
 
-            // Launch GPU kernel with (tile_end - tile_start) blocks
-            parallel_for j in [tile_start, tile_end):
-                H_temp[:,j] = H[:,j] + WtA[j,:] - H × WtW[:,j]
-                H_temp[:,j] = max(H_temp[:,j], ε)
+        cudaDeviceSynchronize()  // Wait for all blocks
 
-            // Update H after all threads complete
-            H[:, tile_start:tile_end] = H_temp[:, tile_start:tile_end]
-
-        // W update (similar tiling)
+        // W update (similar pattern)
         ...
 ```
 
-### Tile Size Tradeoff
+### Performance Results
 
-| Tile Size | Parallelism | Convergence | When to Use |
-|-----------|-------------|-------------|-------------|
-| T=1 | None (sequential) | Exact HALS (~40 iters) | CPU baseline |
-| T=4 | 4× parallel | ~45 iterations | Balanced (recommended) |
-| T=10 | 10× parallel | ~55 iterations | More GPU, slower converge |
-| T=k | k× parallel | ~200 iterations | Converges to MU! |
+| Implementation | Time (ms) | Error | Speedup | Notes |
+|---------------|-----------|-------|---------|-------|
+| CPU (sequential) | 106.3 | 0.487 | 1.0x | Exact Gauss-Seidel |
+| GPU Level 1 (strict) | 95.8 | 0.487 | 1.1x | Single-column parallel |
+| GPU Level 2 (block) | **54.0** | **0.487** | **1.97x** | Block-parallel + shuffle |
 
-**Optimal:** T=4-10 provides good parallelism without excessive iteration increase
+**Key Finding:** Block-parallel achieves **1.97x speedup** with **identical error** thanks to random shuffling!
 
 ---
 
@@ -195,108 +214,106 @@ function HALS_Tiled(X, W, H, k, T):
 
 ---
 
-## GPU Implementation (Tiled Batching)
+## GPU Implementation (Block-Parallel with Random Shuffling)
 
-### File: `src/hals/nmf_hals_gpu_v2_tiled.cu`
+### Level 1: Strict Single-Column (`src/hals/nmf_hals_gpu_v1_strict.cu`)
 
-**Purpose:** Parallelize column updates using tiles
+**Purpose:** Exact Gauss-Seidel with GPU row-parallelism
 
-**Kernel Design:**
+- Processes features **sequentially** (f = 0, 1, ..., k-1)
+- Parallelizes **within each feature** across rows/samples
+- Uses `cudaDeviceSynchronize()` between features
+- **Result:** 1.1x speedup over CPU (limited by sync overhead)
 
-```cuda
-__global__ void hals_update_H_tiled(
-    float* H,           // k × n (column-major)
-    float* WtA,         // k × n
-    float* WtW,         // k × k
-    int k, int n,
-    int tile_start,
-    int tile_size
-) {
-    int col = tile_start + blockIdx.x;     // Column in [tile_start, tile_start+T)
-    int row = threadIdx.x + blockIdx.y * blockDim.x;  // Element in column
+### Level 2: Block-Parallel (`src/hals/nmf_hals_gpu_v2_block.cu`)
 
-    if (col >= tile_start + tile_size || col >= k || row >= n) return;
+**Purpose:** Parallelize across feature blocks while maintaining local Gauss-Seidel
 
-    // Compute: Hx = H[col,row] + WtA[col,row] - sum_j(H[j,row] × WtW[j,col])
-    float Hx = H[col*n + row] + WtA[col*n + row];
+**Key Components:**
 
-    // 8-way ILP for reduction (like MU Level 3)
-    for (int j = 0; j < k; j += 8) {
-        if (j + 7 < k) {
-            Hx -= H[(j+0)*n + row] * WtW[(j+0)*k + col];
-            Hx -= H[(j+1)*n + row] * WtW[(j+1)*k + col];
-            Hx -= H[(j+2)*n + row] * WtW[(j+2)*k + col];
-            Hx -= H[(j+3)*n + row] * WtW[(j+3)*k + col];
-            Hx -= H[(j+4)*n + row] * WtW[(j+4)*k + col];
-            Hx -= H[(j+5)*n + row] * WtW[(j+5)*k + col];
-            Hx -= H[(j+6)*n + row] * WtW[(j+6)*k + col];
-            Hx -= H[(j+7)*n + row] * WtW[(j+7)*k + col];
-        } else {
-            for (int jj = j; jj < k; jj++) {
-                Hx -= H[jj*n + row] * WtW[jj*k + col];
+1. **Fisher-Yates Shuffle** (on host):
+```cpp
+void shuffle_features(int* perm, int k, unsigned int seed) {
+    for (int i = 0; i < k; i++) perm[i] = i;
+    std::mt19937 rng(seed);
+    for (int i = k - 1; i > 0; i--) {
+        std::uniform_int_distribution<int> dist(0, i);
+        std::swap(perm[i], perm[dist(rng)]);
+    }
+}
+```
+
+2. **CUDA Streams** (one per block):
+```cpp
+cudaStream_t streams[num_blocks];
+for (int b = 0; b < num_blocks; b++)
+    cudaStreamCreate(&streams[b]);
+```
+
+3. **Block-Parallel Iteration Loop**:
+```cpp
+for (int iter = 0; iter < max_iter; iter++) {
+    // Random shuffle each iteration (critical!)
+    shuffle_features(perm, k, 42 + iter);
+
+    // Precompute using cuBLAS
+    cublasSgemm(..., d_Numerator_H);  // W^T × X
+    cublasSgemm(..., d_Denom_H);      // W^T × W
+
+    // H Update - blocks in parallel via streams
+    for (int b = 0; b < num_blocks; b++) {
+        for (int local_f = 0; local_f < block_size; local_f++) {
+            int f = get_feature(perm, b, local_f, block_size, k);
+            if (f >= 0) {
+                update_H_column<<<grid, threads, 0, streams[b]>>>(
+                    d_H, d_Numerator_H, d_Denom_H, k, n, f);
             }
         }
     }
+    // Single sync point after all blocks complete
+    for (int b = 0; b < num_blocks; b++)
+        cudaStreamSynchronize(streams[b]);
 
-    Hx = fmaxf(Hx, 1e-16f);
-    H[col*n + row] = Hx;
+    // W Update (similar pattern)
+    ...
 }
 ```
 
-**Host Code:**
-
-```cpp
-void hals_gpu_tiled(float* d_X, float* d_W, float* d_H,
-                    int m, int n, int k, int iters, int tile_size) {
-    for (int iter = 0; iter < iters; iter++) {
-        // H update
-        cublasSgemm(..., d_W, d_X, d_WtA);
-        cublasSgemm(..., d_W, d_W, d_WtW);
-
-        // Process H columns in tiles
-        for (int tile_start = 0; tile_start < k; tile_start += tile_size) {
-            int current_tile_size = min(tile_size, k - tile_start);
-
-            dim3 block(128);
-            dim3 grid(current_tile_size, (n + 127) / 128);
-
-            hals_update_H_tiled<<<grid, block>>>(
-                d_H, d_WtA, d_WtW, k, n, tile_start, current_tile_size
-            );
-        }
-
-        // W update (similar)
-        ...
-    }
-}
-```
+**Sync Reduction:**
+- Level 1: 2k syncs per iteration (one per feature × 2 matrices)
+- Level 2: 2 syncs per iteration (one after all H blocks, one after all W blocks)
+- For k=20: 40 syncs → 2 syncs = **20x fewer syncs!**
 
 ---
 
 ## Performance Analysis
 
-### Expected Results
+### Actual Results (1000×1000, k=20, 15 iterations)
 
-**Convergence:**
-| Tile Size | Iterations to Converge | Convergence Rate |
-|-----------|------------------------|------------------|
-| T=1 (CPU) | 40 | Baseline (1.0×) |
-| T=4 | 45 | 0.89× (11% slower) |
-| T=10 | 55 | 0.73× (37% slower) |
-| T=20 | 80-100 | 0.40-0.50× |
+| Implementation | Time (ms) | Time/Iter | Error | Bandwidth | GFLOPS |
+|----------------|-----------|-----------|-------|-----------|--------|
+| **CPU Baseline** | 106.32 | 7.09 | 0.4869 | N/A | N/A |
+| **GPU Level 1 (Strict)** | 95.78 | 6.39 | 0.4869 | 26.06 GB/s | 13.03 |
+| **GPU Level 2 (Block)** | **53.95** | **3.60** | **0.4869** | 46.26 GB/s | 23.13 |
 
-**Wall-Clock Time (1000×1000, k=20):**
-| Implementation | Time/Iter | Iters | Total Time | vs MU L2 |
-|----------------|-----------|-------|------------|----------|
-| HALS CPU (T=1) | ~X ms | 40 | ~40X ms | ? |
-| HALS GPU (T=4) | ~Y ms | 45 | ~45Y ms | ? |
-| HALS GPU (T=10) | ~Z ms | 55 | ~55Z ms | ? |
-| MU Level 2 | ~0.4 ms | 200 | ~80 ms | Baseline |
+### Speedup Analysis
 
-**Key Finding:** HALS may converge in fewer iterations but might not be faster in wall-clock time due to:
-1. More complex per-iteration operations
-2. Tiling overhead
-3. Less GPU utilization per tile
+| Comparison | Speedup | Notes |
+|------------|---------|-------|
+| GPU L2 vs CPU | **1.97x** | Main achievement |
+| GPU L2 vs GPU L1 | **1.78x** | Benefit of block-parallel |
+| GPU L1 vs CPU | 1.11x | Limited by sync overhead |
+
+### Why Block-Parallel Works So Well
+
+1. **Sync Reduction:** 40 syncs → 2 syncs per iteration (20x fewer!)
+2. **CUDA Stream Parallelism:** 4 blocks execute concurrently
+3. **Random Shuffling:** Maintains convergence quality despite partial Jacobi
+4. **Same Convergence:** Error 0.4869 matches exact Gauss-Seidel (CPU/Level 1)
+
+### Key Finding
+
+Block-parallel with random shuffling achieves **nearly 2x speedup** while maintaining **identical convergence quality**. The random shuffling is critical - without it, fixed groupings would create systematic bias and degrade convergence.
 
 ---
 
@@ -332,30 +349,32 @@ void hals_gpu_tiled(float* d_X, float* d_W, float* d_H,
 ## Implementation Checklist
 
 ### Phase 1: CPU Baseline ✓
-- [ ] Implement `hals_update_H` (sequential)
-- [ ] Implement `hals_update_W` (sequential)
-- [ ] Matrix operations (WtA, WtW, AH, HtH)
-- [ ] Convergence testing (verify ~40 iterations)
-- [ ] Correctness (compare error vs MU)
+- [x] Implement `hals_update_H` (sequential)
+- [x] Implement `hals_update_W` (sequential)
+- [x] Matrix operations (WtA, WtW, AH, HtH)
+- [x] Convergence testing (verified convergence)
+- [x] Correctness (error 0.4869)
 
-### Phase 2: GPU Tiled
-- [ ] Kernel: `hals_update_H_tiled`
-- [ ] Kernel: `hals_update_W_tiled`
-- [ ] Host orchestration (tile loop)
-- [ ] Test T=1 (should match CPU)
-- [ ] Test T=4, 10, 20 (measure convergence)
+### Phase 2: GPU Level 1 (Strict) ✓
+- [x] Kernel: `update_H_column_hals` (single-column parallel)
+- [x] Kernel: `update_W_column_hals` (single-column parallel)
+- [x] Kernel: `normalize_W_column_hals` (column normalization)
+- [x] Host orchestration with `cudaDeviceSynchronize()`
+- [x] Column-major memory layout for cuBLAS
+- [x] Bug fix: Column-major error computation
 
-### Phase 3: Optimization
-- [ ] 8-way ILP in reduction loop
-- [ ] Optimal block/grid dimensions
-- [ ] Minimize tile loop overhead
-- [ ] Profile with Nsight Compute
+### Phase 3: GPU Level 2 (Block-Parallel) ✓
+- [x] Fisher-Yates shuffle for random feature permutation
+- [x] CUDA streams (one per block)
+- [x] Block-parallel H and W updates
+- [x] Single sync point after all blocks
+- [x] Configurable block size (default: 5)
 
-### Phase 4: Analysis
-- [ ] Convergence graph (iterations vs T)
-- [ ] Performance graph (wall-clock vs T)
-- [ ] Compare vs MU (iterations, time, error)
-- [ ] Determine optimal T
+### Phase 4: Analysis ✓
+- [x] Performance comparison: CPU vs GPU L1 vs GPU L2
+- [x] Verify identical convergence (all implementations: 0.4869 error)
+- [x] Measure speedup: 1.97x (GPU L2 vs CPU)
+- [x] Document block-parallel algorithm
 
 ---
 
@@ -405,6 +424,6 @@ void hals_gpu_tiled(float* d_X, float* d_W, float* d_H,
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2025-11-25
-**Status:** CPU implementation complete, GPU tiled batching in progress
+**Document Version:** 2.0
+**Last Updated:** 2025-11-29
+**Status:** Complete - CPU baseline, GPU Level 1 (strict), GPU Level 2 (block-parallel) all implemented and tested

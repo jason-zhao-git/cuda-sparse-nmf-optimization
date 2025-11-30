@@ -1,0 +1,15 @@
+Version: GPU HALS Block-Parallel (Level 2)
+Size: 1000x1000
+Rank: 20
+Block size: 5
+Iterations: 15
+Time: 53.95 ms
+Time per iteration: 3.60 ms
+Final error: 4.869357e-01
+Bandwidth: 46.26 GB/s
+GFLOPS: 23.13
+
+Algorithm: Block-Parallel HALS
+Within-block: Gauss-Seidel (sequential)
+Between-blocks: Jacobi (parallel streams)
+Shuffling: Random each iteration

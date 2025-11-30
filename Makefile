@@ -6,7 +6,8 @@
 
 NVCC = /usr/local/cuda/bin/nvcc
 NVCC_FLAGS = -O3 -arch=sm_86 -Xcompiler -Wall
-LIBS = -lcublas -lcusparse
+LIBS = -lcublas
+LIBS_SPARSE = -lcublas -lcusparse
 
 # GPU Architecture:
 # RTX 3050 (local): -arch=sm_86
@@ -109,13 +110,13 @@ sparse: nmf_sparse nmf_sparse_transpose nmf_sparse_hybrid
 	@echo "✓ All sparse variants built"
 
 nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 nmf_sparse_transpose: $(SRC_DIR)/nmf_sparse_gpu_v3_transpose.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 nmf_sparse_hybrid: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 # Backwards compatibility
 nmf_sparse_gpu: nmf_sparse
@@ -161,9 +162,17 @@ nmf_hals_gpu_strict: $(SRC_DIR)/hals/nmf_hals_gpu_v1_strict.cu $(UTILS)
 	@echo "Building HALS GPU Level 1 (strict Gauss-Seidel)..."
 	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
 
+hals-gpu-block: nmf_hals_gpu_block
+	@echo "✓ HALS GPU Level 2: Block-parallel with random shuffling built"
+
+nmf_hals_gpu_block: $(SRC_DIR)/hals/nmf_hals_gpu_v2_block.cu $(UTILS)
+	@echo "Building HALS GPU Level 2 (block-parallel)..."
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
 # Backwards compatibility
 hals: hals-cpu
 hals-gpu: hals-gpu-strict
+hals-all: hals-cpu hals-gpu-strict hals-gpu-block
 
 # ============================================================================
 # Original simple targets (for backward compatibility)
@@ -278,7 +287,7 @@ clean:
 	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
 	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
-	rm -f nmf_hals_cpu nmf_hals_gpu_strict  # HALS implementations
+	rm -f nmf_hals_cpu nmf_hals_gpu_strict nmf_hals_gpu_block  # HALS implementations
 	rm -f *.o
 	@echo "✓ Cleaned executables"
 
