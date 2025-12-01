@@ -4,28 +4,27 @@
 #include <string.h>
 
 /*
- * LEVEL 3: COMPUTE-OPTIMIZED GPU IMPLEMENTATION WITH CUDA STREAMS
+ * LEVEL 3: COMPUTE-OPTIMIZED GPU IMPLEMENTATION WITH 8-WAY ILP
  *
- * Purpose: Push optimization further with concurrent execution
+ * Purpose: Show element-wise kernel optimization impact
  *
  * Optimizations Beyond Level 2:
- * 1. 8-way ILP (vs 4-way in Level 2) - More latency hiding
- * 2. CUDA Streams - Concurrent execution of independent operations
- * 3. Event-based synchronization - Fine-grained dependency management
- * 4. Block size tuning - Test multiple configurations
+ * 1. 8-way ILP (vs 1 element/thread in Level 2) - More latency hiding
+ * 2. Fused element-wise kernels - Reduced kernel launch overhead
+ * 3. Block size tuning - Test multiple configurations
  *
  * Expected Performance:
- * - 10-20% improvement over Level 2 (combined ILP + streams)
- * - Streams allow overlap of WtW and WtX computations
- * - Event-based sync reduces synchronization overhead
- * - Demonstrates hitting Amdahl's Law limits (cuBLAS still dominates)
+ * - Small improvement over Level 2 (cuBLAS dominates runtime)
+ * - Demonstrates hitting Amdahl's Law limits
+ * - Element-wise ops are <5% of total compute, so ILP gains are minimal
  *
- * This level exists to show WHY we can't optimize further,
- * justifying exploration of algorithmic alternatives (multi-GPU, sparse).
+ * Key insight: The real speedup comes from L1→L2 (naive→cuBLAS),
+ * not L2→L3 (simple→ILP element-wise). This demonstrates why
+ * optimized libraries matter more than micro-optimizations.
  */
 
 
-// 8-way ILP Fused Kernel (vs 4-way in Level 2)
+// 8-way ILP Fused Kernel (vs 1 element/thread in Level 2)
 
 
 __global__ void elementwise_multiply_divide_fused_ilp8(
@@ -105,12 +104,13 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
                          float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
-    printf("LEVEL 3: COMPUTE-OPTIMIZED GPU (8-WAY ILP)\n");
+    printf("LEVEL 3: cuBLAS GPU + 8-WAY ILP\n");
     printf("========================================\n");
     printf("Matrix: %dx%d, Rank: %d, Iterations: %d\n", m, n, k, max_iter);
     printf("Optimizations:\n");
-    printf("  - 8-way ILP (vs 4-way in Level 2)\n");
-    printf("  - Fused element-wise kernels\n");
+    printf("  - cuBLAS for GEMM (same as L2)\n");
+    printf("  - 8-way ILP element-wise (vs 1/thread in L2)\n");
+    printf("  - Fused multiply/divide kernel\n");
     printf("  - Block size: %d threads (tunable)\n", block_size);
     printf("----------------------------------------\n");
 
@@ -168,7 +168,7 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     printf("  Block size: %d threads\n", block_size);
     printf("  Grid size H: %d blocks\n", grid_size_H);
     printf("  Grid size W: %d blocks\n", grid_size_W);
-    printf("  ILP factor: 8 elements/thread (vs 4 in Level 2)\n");
+    printf("  ILP factor: 8 elements/thread (vs 1 in Level 2)\n");
     printf("----------------------------------------\n\n");
 
 

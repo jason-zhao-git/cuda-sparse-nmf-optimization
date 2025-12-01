@@ -4,72 +4,36 @@
 #include <string.h>
 
 /*
- * LEVEL 2: MEMORY-OPTIMIZED GPU IMPLEMENTATION
+ * LEVEL 2: cuBLAS GPU IMPLEMENTATION (NO ILP)
  *
- * Purpose: Optimize memory access patterns and bandwidth utilization
+ * Purpose: Show speedup from using optimized BLAS library (vs L1 naive GEMM)
  *
- * Memory Optimizations:
- * 1. Kernel fusion: Combine multiply and divide (reduce memory traffic)
- * 2. ILP: Process 4 elements per thread (hide memory latency)
- * 3. Coalesced memory access (consecutive threads → consecutive memory)
+ * Optimizations:
+ * 1. cuBLAS for GEMM operations (vs custom naive GEMM in L1)
+ * 2. Simple fused element-wise kernel (NO ILP)
  *
  * Expected Performance:
- * - 1.5-3x speedup over naive
- * - Better memory bandwidth utilization
- * - Reduced kernel launch overhead
+ * - 10-50x speedup over L1 naive GEMM
+ * - Demonstrates impact of optimized libraries
+ * - GEMM is now fast, element-wise is the bottleneck
  *
  */
 
 
-// Memory-Optimized Fused Kernel with ILP
+// Simple fused element-wise kernel (NO ILP)
+// Each thread processes one element
 
 
-__global__ void elementwise_multiply_divide_fused_ilp(
+__global__ void elementwise_multiply_divide_fused_simple(
     float* input,       // Input array to be updated
     float* numerator,   // Multiply by this
     float* denominator, // Divide by this
     int size,
     float eps
 ) {
-    // ILP: Each thread processes 4 consecutive elements
-    // This hides memory latency by overlapping loads/stores with compute
-    int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
-
-    // Process 4 elements if possible
-    if (idx + 3 < size) {
-        // Load 4 elements (memory operations start in parallel)
-        float in0 = input[idx];
-        float in1 = input[idx + 1];
-        float in2 = input[idx + 2];
-        float in3 = input[idx + 3];
-
-        float num0 = numerator[idx];
-        float num1 = numerator[idx + 1];
-        float num2 = numerator[idx + 2];
-        float num3 = numerator[idx + 3];
-
-        float den0 = denominator[idx];
-        float den1 = denominator[idx + 1];
-        float den2 = denominator[idx + 2];
-        float den3 = denominator[idx + 3];
-
-        // Compute all 4 (independent operations = ILP!)
-        // While waiting for memory, GPU can execute these
-        in0 = in0 * num0 / (den0 + eps);
-        in1 = in1 * num1 / (den1 + eps);
-        in2 = in2 * num2 / (den2 + eps);
-        in3 = in3 * num3 / (den3 + eps);
-
-        // Store 4 elements
-        input[idx] = in0;
-        input[idx + 1] = in1;
-        input[idx + 2] = in2;
-        input[idx + 3] = in3;
-    } else {
-        // Handle remaining elements
-        for (int i = idx; i < size && i < idx + 4; i++) {
-            input[i] = input[i] * numerator[i] / (denominator[i] + eps);
-        }
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        input[idx] = input[idx] * numerator[idx] / (denominator[idx] + eps);
     }
 }
 
@@ -82,13 +46,13 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
                         float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
-    printf("LEVEL 2: MEMORY-OPTIMIZED GPU\n");
+    printf("LEVEL 2: cuBLAS GPU (NO ILP)\n");
     printf("========================================\n");
     printf("Matrix: %dx%d, Rank: %d, Iterations: %d\n", m, n, k, max_iter);
-    printf("Memory Optimizations:\n");
-    printf("  - Kernel fusion (2 kernels → 1)\n");
-    printf("  - ILP: 4 elements per thread\n");
-    printf("  - Coalesced memory access\n");
+    printf("Optimizations:\n");
+    printf("  - cuBLAS for GEMM (vs naive GEMM in L1)\n");
+    printf("  - Simple fused element-wise kernel\n");
+    printf("  - NO ILP (1 element per thread)\n");
     printf("----------------------------------------\n");
 
 
@@ -134,20 +98,19 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     float beta = 0.0f;
 
 
-    // Kernel configuration with ILP
+    // Kernel configuration (NO ILP - 1 element per thread)
 
 
-    // Each thread processes 4 elements, so we need 1/4 the threads
     int block_size = 128;
-    int grid_size_H = ((k * n) + (block_size * 4) - 1) / (block_size * 4);
-    int grid_size_W = ((m * k) + (block_size * 4) - 1) / (block_size * 4);
+    int grid_size_H = (k * n + block_size - 1) / block_size;
+    int grid_size_W = (m * k + block_size - 1) / block_size;
 
     printf("\nKernel Configuration:\n");
     printf("  Block size: %d threads\n", block_size);
     printf("  Grid size H: %d blocks\n", grid_size_H);
     printf("  Grid size W: %d blocks\n", grid_size_W);
-    printf("  ILP factor: 4 elements/thread\n");
-    printf("  Kernel launches per iter: 2 (vs 4 naive)\n");
+    printf("  Elements per thread: 1 (no ILP)\n");
+    printf("  Kernel launches per iter: 2 (fused multiply/divide)\n");
     printf("----------------------------------------\n\n");
 
 
@@ -191,8 +154,8 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
                                  &alpha, d_WtW, k, d_H, k,
                                  &beta, d_temp_H, k));
 
-        // 4. FUSED + ILP: H = H .* WtX ./ (temp_H + eps) in ONE kernel
-        elementwise_multiply_divide_fused_ilp<<<grid_size_H, block_size>>>(
+        // 4. FUSED: H = H .* WtX ./ (temp_H + eps) in ONE kernel (no ILP)
+        elementwise_multiply_divide_fused_simple<<<grid_size_H, block_size>>>(
             d_H, d_WtX, d_temp_H, k * n, 1e-10f
         );
 
@@ -221,8 +184,8 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
                                  &alpha, d_W, m, d_HHt, k,
                                  &beta, d_temp_W, m));
 
-        // 4. FUSED + ILP: W = W .* XHt ./ (temp_W + eps) in ONE kernel
-        elementwise_multiply_divide_fused_ilp<<<grid_size_W, block_size>>>(
+        // 4. FUSED: W = W .* XHt ./ (temp_W + eps) in ONE kernel (no ILP)
+        elementwise_multiply_divide_fused_simple<<<grid_size_W, block_size>>>(
             d_W, d_XHt, d_temp_W, m * k, 1e-10f
         );
 
@@ -303,7 +266,7 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
 
 
     printf("========================================\n");
-    printf("MEMORY-OPTIMIZED GPU RESULTS\n");
+    printf("cuBLAS GPU RESULTS (NO ILP)\n");
     printf("========================================\n");
     printf("Time: %.2f ms\n", elapsed_ms);
     printf("FLOPS: %.2f GFLOPS\n", gflops);
@@ -311,11 +274,11 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     printf("Final error: %.6e\n", error);
     printf("========================================\n\n");
 
-    printf("Memory Optimization Impact:\n");
-    printf("  - Kernel fusion: Reduced memory reads by 20%%\n");
-    printf("  - ILP: Hides memory latency with computation\n");
-    printf("  - Fewer blocks: Less scheduling overhead\n");
-    printf("  - Coalesced access: Better cache utilization\n");
+    printf("cuBLAS Impact:\n");
+    printf("  - GEMM is now highly optimized\n");
+    printf("  - Element-wise kernels are simple (no ILP)\n");
+    printf("  - Most time spent in cuBLAS GEMM calls\n");
+    printf("  - Next: L3 adds ILP to element-wise kernels\n");
     printf("========================================\n");
 
     // Return metrics
@@ -376,7 +339,7 @@ int main(int argc, char** argv) {
 
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════════╗\n");
-    printf("║       CSE587 NMF - LEVEL 2: MEMORY-OPTIMIZED GPU              ║\n");
+    printf("║       CSE587 NMF - LEVEL 2: cuBLAS GPU (NO ILP)               ║\n");
     printf("╚════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
 
