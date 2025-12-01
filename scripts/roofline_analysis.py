@@ -44,6 +44,11 @@ class RooflineModel:
                 "peak_flops": 19.5e12,     # 19.5 TFLOPS
                 "peak_bandwidth": 1555e9,   # 1555 GB/s
                 "name": "NVIDIA A100"
+            },
+            "RTX3050": {
+                "peak_flops": 9.1e12,      # 9.1 TFLOPS
+                "peak_bandwidth": 224e9,    # 224 GB/s
+                "name": "NVIDIA RTX 3050"
             }
         }
 
@@ -226,45 +231,54 @@ class RooflineModel:
         print(f"{'='*70}\n")
 
 
-def load_benchmark_results(csv_file):
+def load_benchmark_results(csv_file, k=20):
     """
     Load results from benchmark CSV and convert to roofline format.
+    Computes theoretical FLOPS/bytes based on matrix size and k.
     """
     import pandas as pd
 
     df = pd.read_csv(csv_file)
     results = []
+    roof = RooflineModel("RTX3050")  # For FLOPS/bytes calculation
 
-    # Group by version
-    for version in df['version'].unique():
-        data = df[df['version'] == version]
+    # Group by method and size
+    for _, row in df.iterrows():
+        method = row['method']
+        size = row['size']
+        time_ms = row['time_ms']
+        iterations = row.get('iterations', 100)
 
-        if len(data) > 0:
-            avg_time = data['time_ms'].mean()
-            avg_flops = data['total_flops'].mean()
-            avg_bytes = data['total_bytes'].mean()
+        # Calculate theoretical FLOPS and bytes for this size
+        flops, bytes_transferred, _ = roof.calculate_nmf_metrics(size, size, k)
 
-            results.append({
-                'name': version,
-                'flops': avg_flops,
-                'bytes': avg_bytes,
-                'time_ms': avg_time
-            })
+        # Scale by iterations
+        total_flops = flops * iterations
+        total_bytes = bytes_transferred * iterations
+
+        results.append({
+            'name': f"{method} ({size})",
+            'method': method,
+            'size': size,
+            'flops': total_flops,
+            'bytes': total_bytes,
+            'time_ms': time_ms
+        })
 
     return results
 
 
 def main():
     parser = argparse.ArgumentParser(description='Roofline Model Analysis')
-    parser.add_argument('--gpu', type=str, default='V100', choices=['V100', 'A100'],
+    parser.add_argument('--gpu', type=str, default='RTX3050', choices=['V100', 'A100', 'RTX3050'],
                        help='GPU model')
     parser.add_argument('--size', type=int, default=1000,
                        help='Matrix size for theoretical analysis')
     parser.add_argument('--rank', type=int, default=20,
                        help='Rank k')
-    parser.add_argument('--results', type=str, default=None,
+    parser.add_argument('--results', type=str, default='results/benchmark_timing.csv',
                        help='CSV file with benchmark results')
-    parser.add_argument('--output', type=str, default='results/plots/roofline.png',
+    parser.add_argument('--output', type=str, default='results/figures/roofline.png',
                        help='Output plot file')
 
     args = parser.parse_args()
