@@ -49,6 +49,11 @@ class RooflineModel:
                 "peak_flops": 9.1e12,      # 9.1 TFLOPS
                 "peak_bandwidth": 224e9,    # 224 GB/s
                 "name": "NVIDIA RTX 3050"
+            },
+            "A40": {
+                "peak_flops": 37.4e12,     # 37.4 TFLOPS
+                "peak_bandwidth": 696e9,    # 696 GB/s
+                "name": "NVIDIA A40"
             }
         }
 
@@ -240,7 +245,7 @@ def load_benchmark_results(csv_file, k=20):
 
     df = pd.read_csv(csv_file)
     results = []
-    roof = RooflineModel("RTX3050")  # For FLOPS/bytes calculation
+    roof = RooflineModel("A40")  # For FLOPS/bytes calculation
 
     # Group by method and size
     for _, row in df.iterrows():
@@ -270,7 +275,7 @@ def load_benchmark_results(csv_file, k=20):
 
 def main():
     parser = argparse.ArgumentParser(description='Roofline Model Analysis')
-    parser.add_argument('--gpu', type=str, default='RTX3050', choices=['V100', 'A100', 'RTX3050'],
+    parser.add_argument('--gpu', type=str, default='A40', choices=['V100', 'A100', 'RTX3050', 'A40'],
                        help='GPU model')
     parser.add_argument('--size', type=int, default=1000,
                        help='Matrix size for theoretical analysis')
