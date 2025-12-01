@@ -1,6 +1,7 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <algorithm>
 #include <random>
@@ -277,7 +278,8 @@ float compute_error_column_major(const float* X, const float* W, const float* H,
 void nmf_hals_gpu_block(float* h_X, int m, int n, int k, int max_iter,
                         int block_size,
                         float* time_ms, float* bandwidth_achieved,
-                        float* flops_achieved, float* final_error) {
+                        float* flops_achieved, float* final_error,
+                        bool log_convergence, int log_interval) {
 
     int num_blocks = (k + block_size - 1) / block_size;
 
@@ -346,6 +348,15 @@ void nmf_hals_gpu_block(float* h_X, int m, int n, int k, int max_iter,
     printf("  CUDA streams: %d (one per feature block)\n", num_blocks);
     printf("  Syncs per iteration: 2 (vs %d in strict)\n", 2 * k);
     printf("----------------------------------------\n\n");
+
+    // Convergence logging setup
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_hals_block.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,time_ms\n");
+        }
+    }
 
     // Main iteration loop
     CudaTimer timer;
@@ -433,13 +444,36 @@ void nmf_hals_gpu_block(float* h_X, int m, int n, int k, int max_iter,
             CUDA_CHECK(cudaStreamSynchronize(streams[b]));
         }
 
-        // Print progress
-        if (iter % 5 == 0 || iter == max_iter - 1) {
+        // Per-iteration convergence logging
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            float iter_time_ms = timer.stopTimer();
+
+            // Copy current W, H to host for error computation
+            CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
+
+            float error = compute_error_column_major(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.2f\n", iter, error, iter_time_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, time=%.2f ms\n", iter, error, iter_time_ms);
+
+            // Restart timer for next interval
+            timer.startTimer();
+        } else if (iter % 5 == 0 || iter == max_iter - 1) {
             printf("Iteration %d\n", iter);
         }
     }
 
     float elapsed_ms = timer.stopTimer();
+
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("Convergence log saved to results/convergence_hals_block.csv\n");
+    }
 
     // Copy results back
     CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
@@ -519,8 +553,9 @@ void nmf_hals_gpu_block(float* h_X, int m, int n, int k, int max_iter,
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size]\n", argv[0]);
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size] [--log-convergence [interval]]\n", argv[0]);
         printf("Example: %s data/dense_1000.bin 20 15 5\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 50 5 --log-convergence 5\n", argv[0]);
         printf("\nblock_size: features per block (default: %d)\n", DEFAULT_BLOCK_SIZE);
         return 1;
     }
@@ -528,7 +563,22 @@ int main(int argc, char** argv) {
     const char* matrix_file = argv[1];
     int k = atoi(argv[2]);
     int max_iter = atoi(argv[3]);
-    int block_size = (argc > 4) ? atoi(argv[4]) : DEFAULT_BLOCK_SIZE;
+    int block_size = DEFAULT_BLOCK_SIZE;
+    bool log_convergence = false;
+    int log_interval = 1;
+
+    // Parse optional arguments
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (argv[i][0] != '-') {
+            block_size = atoi(argv[i]);
+        }
+    }
 
     printf("\n╔════════════════════════════════════════════════════════════════╗\n");
     printf("║     CSE587 NMF - GPU HALS LEVEL 2: BLOCK-PARALLEL             ║\n");
@@ -543,7 +593,8 @@ int main(int argc, char** argv) {
     // Run GPU HALS Block-Parallel
     float time_ms, bandwidth_gbps, gflops, error;
     nmf_hals_gpu_block(h_X, m, n, k, max_iter, block_size,
-                       &time_ms, &bandwidth_gbps, &gflops, &error);
+                       &time_ms, &bandwidth_gbps, &gflops, &error,
+                       log_convergence, log_interval);
 
     // Save metrics
     printf("\nSaving metrics to results/hals_gpu_block_metrics.txt...\n");
@@ -556,7 +607,7 @@ int main(int argc, char** argv) {
         fprintf(fp, "Iterations: %d\n", max_iter);
         fprintf(fp, "Time: %.2f ms\n", time_ms);
         fprintf(fp, "Time per iteration: %.2f ms\n", time_ms / max_iter);
-        fprintf(fp, "Final error: %e\n", error);
+        fprintf(fp, "Final_Error: %.6e\n", error);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
         fprintf(fp, "\nAlgorithm: Block-Parallel HALS\n");
@@ -565,6 +616,10 @@ int main(int argc, char** argv) {
         fprintf(fp, "Shuffling: Random each iteration\n");
         fclose(fp);
         printf("✓ Metrics saved\n");
+    }
+
+    if (log_convergence) {
+        printf("✓ Convergence log saved to results/convergence_hals_block.csv\n");
     }
 
     printf("\nComparison with Level 1 (Strict):\n");

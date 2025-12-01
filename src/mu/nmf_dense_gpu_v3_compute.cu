@@ -1,6 +1,7 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
  * LEVEL 3: COMPUTE-OPTIMIZED GPU IMPLEMENTATION WITH CUDA STREAMS
@@ -100,7 +101,8 @@ __global__ void elementwise_multiply_divide_fused_ilp8(
 
 
 void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int block_size,
-                         float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                         float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                         float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
     printf("LEVEL 3: COMPUTE-OPTIMIZED GPU + STREAMS\n");
@@ -209,6 +211,14 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
 
     // Main iteration loop
 
+    // Convergence logging setup
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_mu_l3.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,time_ms\n");
+        }
+    }
 
     CudaTimer timer;
     timer.startTimer();
@@ -296,7 +306,26 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
         );
         CUDA_CHECK(cudaEventRecord(event_temp_W, stream_elementwise));  // Reuse event to signal W is updated
 
-        if (iter % 10 == 0) {
+        // Per-iteration convergence logging
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            cudaDeviceSynchronize();
+            float iter_time_ms = timer.stopTimer();
+
+            // Copy current W, H to host for error computation
+            CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
+
+            float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.2f\n", iter, error, iter_time_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, time=%.2f ms\n", iter, error, iter_time_ms);
+
+            // Restart timer for next interval
+            timer.startTimer();
+        } else if (iter % 10 == 0) {
             printf("Iteration %d\n", iter);
         }
     }
@@ -305,6 +334,12 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     CUDA_CHECK(cudaDeviceSynchronize());
 
     float elapsed_ms = timer.stopTimer();
+
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("Convergence log saved to results/convergence_mu_l3.csv\n");
+    }
 
 
     // Copy results back
@@ -370,6 +405,7 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
 
     // Cleanup
@@ -436,8 +472,9 @@ void test_block_sizes(float* h_X, int m, int n, int k, int max_iter) {
         printf("Testing block size: %d threads/block\n", bs);
         printf("----------------------------------------\n");
 
-        float time_ms, bandwidth, gflops;
-        nmf_compute_opt_gpu(h_X, m, n, k, max_iter, bs, &time_ms, &bandwidth, &gflops);
+        float time_ms, bandwidth, gflops, final_error;
+        nmf_compute_opt_gpu(h_X, m, n, k, max_iter, bs, &time_ms, &bandwidth, &gflops,
+                            &final_error, false, 1);
 
         if (time_ms < best_time) {
             best_time = time_ms;
@@ -466,9 +503,10 @@ void test_block_sizes(float* h_X, int m, int n, int k, int max_iter) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size] [--tune]\n", argv[0]);
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size] [--tune] [--log-convergence [interval]]\n", argv[0]);
         printf("Example: %s data/dense_1000.bin 20 50 128\n", argv[0]);
         printf("         %s data/dense_1000.bin 20 50 --tune   (test multiple block sizes)\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 128 --log-convergence 5\n", argv[0]);
         return 1;
     }
 
@@ -478,12 +516,21 @@ int main(int argc, char** argv) {
 
     bool tune_mode = false;
     int block_size = 128;  // Default
+    bool log_convergence = false;
+    int log_interval = 1;
 
-    if (argc >= 5) {
-        if (strcmp(argv[4], "--tune") == 0) {
+    // Parse arguments
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--tune") == 0) {
             tune_mode = true;
-        } else {
-            block_size = atoi(argv[4]);
+        } else if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (argv[i][0] != '-') {
+            block_size = atoi(argv[i]);
         }
     }
 
@@ -504,8 +551,9 @@ int main(int argc, char** argv) {
         test_block_sizes(h_X, m, n_dim, k, max_iter);
     } else {
         // Single run with specified block size
-        float time_ms, bandwidth_gbps, gflops;
-        nmf_compute_opt_gpu(h_X, m, n_dim, k, max_iter, block_size, &time_ms, &bandwidth_gbps, &gflops);
+        float time_ms, bandwidth_gbps, gflops, final_error;
+        nmf_compute_opt_gpu(h_X, m, n_dim, k, max_iter, block_size, &time_ms, &bandwidth_gbps, &gflops,
+                            &final_error, log_convergence, log_interval);
 
         // Save metrics for comparison
         printf("\nSaving metrics to results/compute_opt_metrics.txt...\n");
@@ -519,8 +567,13 @@ int main(int argc, char** argv) {
             fprintf(fp, "Time: %.2f ms\n", time_ms);
             fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
             fprintf(fp, "GFLOPS: %.2f\n", gflops);
+            fprintf(fp, "Final_Error: %.6e\n", final_error);
             fclose(fp);
             printf("✓ Metrics saved\n");
+        }
+
+        if (log_convergence) {
+            printf("✓ Convergence log saved to results/convergence_mu_l3.csv\n");
         }
     }
 

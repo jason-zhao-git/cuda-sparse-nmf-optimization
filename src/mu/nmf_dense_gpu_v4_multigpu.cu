@@ -1,6 +1,7 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <omp.h>
 
 /*
@@ -206,7 +207,7 @@ void cleanup_gpu_context(GPUContext* ctx) {
 // Multi-GPU NMF Implementation
 void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
                   float* time_ms, float* bandwidth_achieved, float* flops_achieved,
-                  float* final_error) {
+                  float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
     printf("LEVEL 4: MULTI-GPU IMPLEMENTATION\n");
@@ -263,11 +264,27 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
     float alpha = 1.0f;
     float beta = 0.0f;
 
+    // Convergence logging setup with communication breakdown
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_mu_l4.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,compute_ms,comm_ms,total_ms\n");
+        }
+    }
+
+    // Timing accumulators for breakdown
+    float total_compute_ms = 0.0f;
+    float total_comm_ms = 0.0f;
+
     // Main iteration loop
     CudaTimer timer;
+    CudaTimer comm_timer;  // For communication timing
     timer.startTimer();
 
     for (int iter = 0; iter < max_iter; iter++) {
+        float iter_compute_ms = 0.0f;
+        float iter_comm_ms = 0.0f;
         // ====================================================================
         // Update H: H = H .* (W^T × X) ./ (W^T × W × H + eps)
         // This is INDEPENDENT across GPUs (no communication needed)
@@ -319,7 +336,10 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
         // Requires AllReduce for HHt and XHt
         // ====================================================================
 
-        // Step 1: Each GPU computes local HHt and XHt
+        // Start communication timing (includes D2H, CPU sum, H2D)
+        comm_timer.startTimer();
+
+        // Step 1: Each GPU computes local HHt and XHt and copies to host
         #pragma omp parallel for num_threads(num_gpus)
         for (int gpu = 0; gpu < num_gpus; gpu++) {
             GPUContext* ctx = &contexts[gpu];
@@ -341,7 +361,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
                                      &alpha, ctx->d_X, m, ctx->d_H, k,
                                      &beta, ctx->d_XHt, m));
 
-            // Copy to pinned memory for AllReduce
+            // Copy to pinned memory for AllReduce (D2H)
             CUDA_CHECK(cudaMemcpy(ctx->h_HHt_pinned, ctx->d_HHt, k * k * sizeof(float), cudaMemcpyDeviceToHost));
             CUDA_CHECK(cudaMemcpy(ctx->h_XHt_pinned, ctx->d_XHt, m * k * sizeof(float), cudaMemcpyDeviceToHost));
         }
@@ -361,17 +381,32 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
             }
         }
 
-        // Step 3: Broadcast reduced results and update W on each GPU
+        // Step 3: Broadcast reduced results to each GPU (H2D)
+        #pragma omp parallel for num_threads(num_gpus)
+        for (int gpu = 0; gpu < num_gpus; gpu++) {
+            GPUContext* ctx = &contexts[gpu];
+            CUDA_CHECK(cudaSetDevice(ctx->gpu_id));
+
+            // Copy reduced HHt and XHt to pre-allocated device buffers (no malloc in loop!)
+            CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
+        }
+
+        // End communication timing
+        for (int gpu = 0; gpu < num_gpus; gpu++) {
+            CUDA_CHECK(cudaSetDevice(gpu));
+            CUDA_CHECK(cudaDeviceSynchronize());
+        }
+        iter_comm_ms = comm_timer.stopTimer();
+        total_comm_ms += iter_comm_ms;
+
+        // Step 4: Update W on each GPU (pure compute)
         #pragma omp parallel for num_threads(num_gpus)
         for (int gpu = 0; gpu < num_gpus; gpu++) {
             GPUContext* ctx = &contexts[gpu];
             CUDA_CHECK(cudaSetDevice(ctx->gpu_id));
 
             int grid_size_W = ((m * k) + (128 * 8) - 1) / (128 * 8);
-
-            // Copy reduced HHt and XHt to pre-allocated device buffers (no malloc in loop!)
-            CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
-            CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
 
             // temp_W = W × HHt_global
             CUBLAS_CHECK(cublasSgemm(ctx->cublas_handle,
@@ -392,18 +427,63 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
             CUDA_CHECK(cudaDeviceSynchronize());
         }
 
-        if (iter % 10 == 0) {
+        // Calculate compute time as total iter time minus communication time
+        float iter_total_ms = timer.stopTimer();
+        iter_compute_ms = iter_total_ms - iter_comm_ms;
+        total_compute_ms += iter_compute_ms;
+
+        // Per-iteration convergence logging with communication breakdown
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            // Gather current W and H for error computation
+            CUDA_CHECK(cudaSetDevice(0));
+            CUDA_CHECK(cudaMemcpy(h_W, contexts[0].d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+
+            // Gather H from all GPUs
+            for (int gpu = 0; gpu < num_gpus; gpu++) {
+                GPUContext* ctx = &contexts[gpu];
+                CUDA_CHECK(cudaSetDevice(ctx->gpu_id));
+                for (int col = 0; col < ctx->n_local; col++) {
+                    CUDA_CHECK(cudaMemcpy(h_H + (ctx->col_offset + col) * k,
+                                          ctx->d_H + col * k,
+                                          k * sizeof(float),
+                                          cudaMemcpyDeviceToHost));
+                }
+            }
+
+            float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.4f,%.4f,%.4f\n", iter, error,
+                        total_compute_ms, total_comm_ms, total_compute_ms + total_comm_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, compute=%.2f ms, comm=%.2f ms (%.1f%%)\n",
+                   iter, error, total_compute_ms, total_comm_ms,
+                   100.0f * total_comm_ms / (total_compute_ms + total_comm_ms));
+        } else if (iter % 10 == 0) {
             printf("Iteration %d\n", iter);
         }
+
+        // Restart timer for next iteration
+        timer.startTimer();
     }
 
-    // Synchronize all GPUs
+    // Final synchronization
     for (int gpu = 0; gpu < num_gpus; gpu++) {
         CUDA_CHECK(cudaSetDevice(gpu));
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    float elapsed_ms = timer.stopTimer();
+    float elapsed_ms = total_compute_ms + total_comm_ms;
+
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("\nConvergence log saved to results/convergence_mu_l4.csv\n");
+        printf("Communication breakdown: compute=%.2f ms (%.1f%%), comm=%.2f ms (%.1f%%)\n",
+               total_compute_ms, 100.0f * total_compute_ms / elapsed_ms,
+               total_comm_ms, 100.0f * total_comm_ms / elapsed_ms);
+    }
 
     // Copy results back from GPU 0
     CUDA_CHECK(cudaSetDevice(0));
@@ -479,15 +559,31 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
 // Main Function
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [num_gpus]\n", argv[0]);
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [num_gpus] [--log-convergence [interval]]\n", argv[0]);
         printf("Example: %s data/dense_1000.bin 20 50 2\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 2 --log-convergence 5\n", argv[0]);
         return 1;
     }
 
     const char* matrix_file = argv[1];
     int k = atoi(argv[2]);
     int max_iter = atoi(argv[3]);
-    int num_gpus = (argc >= 5) ? atoi(argv[4]) : 2;  // Default: 2 GPUs
+    int num_gpus = 2;  // Default: 2 GPUs
+    bool log_convergence = false;
+    int log_interval = 1;
+
+    // Parse optional arguments
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (argv[i][0] != '-') {
+            num_gpus = atoi(argv[i]);
+        }
+    }
 
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════════╗\n");
@@ -503,7 +599,8 @@ int main(int argc, char** argv) {
 
     // Run multi-GPU NMF
     float time_ms, bandwidth_gbps, gflops, error;
-    nmf_multigpu(h_X, m, n, k, max_iter, num_gpus, &time_ms, &bandwidth_gbps, &gflops, &error);
+    nmf_multigpu(h_X, m, n, k, max_iter, num_gpus, &time_ms, &bandwidth_gbps, &gflops, &error,
+                 log_convergence, log_interval);
 
     // Save metrics
     printf("\nSaving metrics to results/multigpu_metrics.txt...\n");
@@ -515,11 +612,15 @@ int main(int argc, char** argv) {
         fprintf(fp, "Iterations: %d\n", max_iter);
         fprintf(fp, "GPUs: %d\n", num_gpus);
         fprintf(fp, "Time: %.2f ms\n", time_ms);
-        fprintf(fp, "Final error: %.6e\n", error);
+        fprintf(fp, "Final_Error: %.6e\n", error);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
         fclose(fp);
         printf("✓ Metrics saved\n");
+    }
+
+    if (log_convergence) {
+        printf("✓ Convergence log saved to results/convergence_mu_l4.csv\n");
     }
 
     printf("\n");

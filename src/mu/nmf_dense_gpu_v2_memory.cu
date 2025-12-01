@@ -1,6 +1,7 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
  * LEVEL 2: MEMORY-OPTIMIZED GPU IMPLEMENTATION
@@ -77,7 +78,8 @@ __global__ void elementwise_multiply_divide_fused_ilp(
 
 
 void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
-                        float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                        float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                        float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
     printf("LEVEL 2: MEMORY-OPTIMIZED GPU\n");
@@ -151,6 +153,14 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
 
     // Main iteration loop
 
+    // Convergence logging setup
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_mu_l2.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,time_ms\n");
+        }
+    }
 
     CudaTimer timer;
     timer.startTimer();
@@ -216,13 +226,37 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
             d_W, d_XHt, d_temp_W, m * k, 1e-10f
         );
 
-        if (iter % 10 == 0) {
+        // Per-iteration convergence logging
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            cudaDeviceSynchronize();
+            float iter_time_ms = timer.stopTimer();
+
+            // Copy current W, H to host for error computation
+            CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
+
+            float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.2f\n", iter, error, iter_time_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, time=%.2f ms\n", iter, error, iter_time_ms);
+
+            // Restart timer for next interval
+            timer.startTimer();
+        } else if (iter % 10 == 0) {
             printf("Iteration %d\n", iter);
         }
     }
 
     float elapsed_ms = timer.stopTimer();
 
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("Convergence log saved to results/convergence_mu_l2.csv\n");
+    }
 
     // Copy results back
 
@@ -288,6 +322,7 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
 
     // Cleanup
@@ -315,15 +350,29 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter>\n", argv[0]);
-        printf("Example: %s data/sparse_1000_90.bin 20 100\n", argv[0]);
-        printf("\nGenerate matrix with: python3 data/generate_matrix.py --size 1000 --sparsity 0.9 --output data/sparse_1000_90.bin\n");
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [--log-convergence [interval]]\n", argv[0]);
+        printf("Example: %s data/dense_1000.bin 20 100\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 --log-convergence 5\n", argv[0]);
+        printf("\nGenerate matrix with: python3 data/generate_matrix.py --size 1000 --output data/dense_1000.bin\n");
         return 1;
     }
 
     const char* matrix_file = argv[1];
     int k = atoi(argv[2]);
     int max_iter = atoi(argv[3]);
+
+    // Parse optional --log-convergence flag
+    bool log_convergence = false;
+    int log_interval = 1;  // Default: log every iteration
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        }
+    }
 
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════════╗\n");
@@ -338,8 +387,9 @@ int main(int argc, char** argv) {
     printf("\n");
 
     // Run memory-optimized GPU NMF
-    float time_ms, bandwidth_gbps, gflops;
-    nmf_memory_opt_gpu(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops);
+    float time_ms, bandwidth_gbps, gflops, final_error;
+    nmf_memory_opt_gpu(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops,
+                       &final_error, log_convergence, log_interval);
 
     // Save metrics for comparison
     printf("\nSaving metrics to results/memory_opt_metrics.txt...\n");
@@ -352,8 +402,13 @@ int main(int argc, char** argv) {
         fprintf(fp, "Time: %.2f ms\n", time_ms);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
+        fprintf(fp, "Final_Error: %.6e\n", final_error);
         fclose(fp);
         printf("✓ Metrics saved\n");
+    }
+
+    if (log_convergence) {
+        printf("✓ Convergence log saved to results/convergence_mu_l2.csv\n");
     }
 
     printf("\n");
