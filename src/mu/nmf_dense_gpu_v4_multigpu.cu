@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <omp.h>
+#include <chrono>
 
 /*
  * LEVEL 4: MULTI-GPU IMPLEMENTATION WITH OPENMP
@@ -277,10 +278,9 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
     float total_compute_ms = 0.0f;
     float total_comm_ms = 0.0f;
 
-    // Main iteration loop
-    CudaTimer timer;
-    CudaTimer comm_timer;  // For communication timing
-    timer.startTimer();
+    // Main iteration loop - use CPU timing for multi-GPU (CUDA events are device-specific)
+    auto cpu_start = std::chrono::high_resolution_clock::now();
+    auto comm_start = cpu_start;
 
     for (int iter = 0; iter < max_iter; iter++) {
         float iter_compute_ms = 0.0f;
@@ -337,7 +337,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
         // ====================================================================
 
         // Start communication timing (includes D2H, CPU sum, H2D)
-        comm_timer.startTimer();
+        comm_start = std::chrono::high_resolution_clock::now();
 
         // Step 1: Each GPU computes local HHt and XHt and copies to host
         #pragma omp parallel for num_threads(num_gpus)
@@ -397,7 +397,8 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
             CUDA_CHECK(cudaSetDevice(gpu));
             CUDA_CHECK(cudaDeviceSynchronize());
         }
-        iter_comm_ms = comm_timer.stopTimer();
+        auto comm_end = std::chrono::high_resolution_clock::now();
+        iter_comm_ms = std::chrono::duration<float, std::milli>(comm_end - comm_start).count();
         total_comm_ms += iter_comm_ms;
 
         // Step 4: Update W on each GPU (pure compute)
@@ -428,7 +429,8 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
         }
 
         // Calculate compute time as total iter time minus communication time
-        float iter_total_ms = timer.stopTimer();
+        auto iter_end = std::chrono::high_resolution_clock::now();
+        float iter_total_ms = std::chrono::duration<float, std::milli>(iter_end - cpu_start).count();
         iter_compute_ms = iter_total_ms - iter_comm_ms;
         total_compute_ms += iter_compute_ms;
 
@@ -465,7 +467,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
         }
 
         // Restart timer for next iteration
-        timer.startTimer();
+        cpu_start = std::chrono::high_resolution_clock::now();
     }
 
     // Final synchronization
