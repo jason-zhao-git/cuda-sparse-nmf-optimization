@@ -4,7 +4,8 @@
 # Compiler and Flags
 # ============================================================================
 
-NVCC = /usr/local/cuda/bin/nvcc
+# Use nvcc from PATH (works with module load cuda)
+NVCC = nvcc
 NVCC_FLAGS = -O3 -arch=sm_86 -Xcompiler -Wall
 LIBS = -lcublas
 LIBS_SPARSE = -lcublas -lcusparse
@@ -28,24 +29,21 @@ UTILS = $(SRC_DIR)/utils.cu
 
 .PHONY: all clean test help levels naive memory-opt compute-opt sparse advanced
 
-# Build all optimization levels
-all: naive memory-opt compute-opt sparse
+# Build all optimization levels (MU + HALS)
+all: naive memory-opt compute-opt multigpu hals
 	@echo ""
 	@echo "╔════════════════════════════════════════════════════╗"
 	@echo "║         Build Complete!                            ║"
 	@echo "╚════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Built optimization levels:"
-	@echo "  ✓ Level 1 (naive): Baseline dense GPU"
-	@echo "  ✓ Level 2 (memory-opt): Kernel fusion + 4-way ILP"
-	@echo "  ✓ Level 3 (compute-opt): 8-way ILP + block tuning"
-	@echo "  ✓ Sparse variants: CSR format implementations"
-	@echo ""
-	@echo "Quick test:"
-	@echo "  ./nmf_naive data/dense_1000.bin 20 50"
-	@echo "  ./nmf_memory_opt data/dense_1000.bin 20 50"
-	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50"
-	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50 --tune  # Test block sizes"
+	@echo "Built implementations:"
+	@echo "  ✓ MU Naive: Baseline dense GPU"
+	@echo "  ✓ MU L2 Memory: Kernel fusion + 4-way ILP"
+	@echo "  ✓ MU L3 Compute: 8-way ILP + block tuning"
+	@echo "  ✓ MU L4 MultiGPU: Data parallel across GPUs"
+	@echo "  ✓ HALS CPU: Sequential baseline"
+	@echo "  ✓ HALS GPU Strict: Gauss-Seidel parallelism"
+	@echo "  ✓ HALS GPU Block: Block-parallel with shuffling"
 	@echo ""
 
 # Build levels individually
