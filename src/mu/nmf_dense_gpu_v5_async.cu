@@ -6,29 +6,20 @@
 #include <chrono>
 
 /*
- * LEVEL 4: MULTI-GPU IMPLEMENTATION WITH OPENMP
+ * LEVEL 5: ASYNC MULTI-GPU WITH CONFIGURABLE SYNC INTERVAL
  *
- * Purpose: Distributed parallel computing across multiple GPUs
+ * Purpose: Reduce communication overhead via less frequent synchronization
  *
  * Key Features:
- * 1. Column-wise data parallelism - Split X and H across GPUs
- * 2. W matrix replication - Each GPU maintains full W
- * 3. CPU-mediated AllReduce - Synchronize partial results
- * 4. OpenMP for multi-threading - One thread per GPU
- * 5. Pinned memory for fast transfers
+ * 1. Column-wise data parallelism (same as L4)
+ * 2. Configurable sync_interval (default=5)
+ * 3. Between syncs: each GPU uses LOCAL HHt/XHt (approximate)
+ * 4. At sync points: AllReduce to get GLOBAL HHt/XHt
  *
- * Data Distribution:
- * - GPU 0: X[:, 0:n/2], H[:, 0:n/2], W[m×k]
- * - GPU 1: X[:, n/2:n], H[:, n/2:n], W[m×k]
- *
- * Communication Pattern:
- * - H update: Independent (no communication)
- * - W update: AllReduce for HHt and XHt
- *
- * Expected Performance:
- * - 1.7-1.9x speedup for 2 GPUs (91% efficiency)
- * - Crossover point: ~800×800 matrices
- * - Communication overhead: ~9% for typical sizes
+ * Trade-off:
+ * - sync_interval=1: Exact (same as L4), high communication
+ * - sync_interval=5: 5x less communication, slight accuracy loss
+ * - sync_interval=10+: Even faster, more approximate
  */
 
 
@@ -205,19 +196,19 @@ void cleanup_gpu_context(GPUContext* ctx) {
 }
 
 
-// Multi-GPU NMF Implementation
-void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
-                  float* time_ms, float* bandwidth_achieved, float* flops_achieved,
-                  float* final_error, bool log_convergence, int log_interval) {
+// Async Multi-GPU NMF Implementation with configurable sync interval
+void nmf_multigpu_async(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
+                        int sync_interval,  // Sync every N iterations (default=5)
+                        float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                        float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
-    printf("LEVEL 4: MULTI-GPU IMPLEMENTATION\n");
+    printf("LEVEL 5: ASYNC MULTI-GPU (sync every %d)\n", sync_interval);
     printf("========================================\n");
     printf("Matrix: %dx%d, Rank: %d, Iterations: %d\n", m, n, k, max_iter);
     printf("Number of GPUs: %d\n", num_gpus);
-    printf("Parallelization: Column-wise data distribution\n");
-    printf("Communication: CPU-mediated AllReduce\n");
-    printf("Expected: 1.7-1.9x speedup for 2 GPUs\n");
+    printf("Sync interval: %d iterations\n", sync_interval);
+    printf("Communication reduction: ~%dx vs L4\n", sync_interval);
     printf("----------------------------------------\n");
 
     // Check GPU availability
@@ -268,7 +259,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
     // Convergence logging setup with communication breakdown
     FILE* csv_fp = NULL;
     if (log_convergence) {
-        csv_fp = fopen("results/convergence_mu_l4.csv", "w");
+        csv_fp = fopen("results/convergence_mu_l5.csv", "w");
         if (csv_fp) {
             fprintf(csv_fp, "iteration,error,compute_ms,comm_ms,total_ms\n");
         }
@@ -333,13 +324,15 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
 
         // ====================================================================
         // Update W: W = W .* (X × H^T) ./ (W × H × H^T + eps)
-        // Requires AllReduce for HHt and XHt
+        // AllReduce only every sync_interval iterations
         // ====================================================================
 
-        // Start communication timing (includes D2H, CPU sum, H2D)
+        bool do_sync = (iter % sync_interval == 0) || (iter == max_iter - 1);
+
+        // Start communication timing
         comm_start = std::chrono::high_resolution_clock::now();
 
-        // Step 1: Each GPU computes local HHt and XHt and copies to host
+        // Step 1: Each GPU computes local HHt and XHt
         #pragma omp parallel for num_threads(num_gpus)
         for (int gpu = 0; gpu < num_gpus; gpu++) {
             GPUContext* ctx = &contexts[gpu];
@@ -361,35 +354,39 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
                                      &alpha, ctx->d_X, m, ctx->d_H, k,
                                      &beta, ctx->d_XHt, m));
 
-            // Copy to pinned memory for AllReduce (D2H)
-            CUDA_CHECK(cudaMemcpy(ctx->h_HHt_pinned, ctx->d_HHt, k * k * sizeof(float), cudaMemcpyDeviceToHost));
-            CUDA_CHECK(cudaMemcpy(ctx->h_XHt_pinned, ctx->d_XHt, m * k * sizeof(float), cudaMemcpyDeviceToHost));
-        }
-
-        // Step 2: CPU-mediated AllReduce (sum reduction)
-        // Initialize with zeros
-        for (int i = 0; i < k * k; i++) h_HHt_global[i] = 0.0f;
-        for (int i = 0; i < m * k; i++) h_XHt_global[i] = 0.0f;
-
-        // Sum all partial results
-        for (int gpu = 0; gpu < num_gpus; gpu++) {
-            for (int i = 0; i < k * k; i++) {
-                h_HHt_global[i] += contexts[gpu].h_HHt_pinned[i];
-            }
-            for (int i = 0; i < m * k; i++) {
-                h_XHt_global[i] += contexts[gpu].h_XHt_pinned[i];
+            if (do_sync) {
+                // Copy to pinned memory for AllReduce (D2H)
+                CUDA_CHECK(cudaMemcpy(ctx->h_HHt_pinned, ctx->d_HHt, k * k * sizeof(float), cudaMemcpyDeviceToHost));
+                CUDA_CHECK(cudaMemcpy(ctx->h_XHt_pinned, ctx->d_XHt, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            } else {
+                // Use local HHt/XHt directly (no communication)
+                CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, ctx->d_HHt, k * k * sizeof(float), cudaMemcpyDeviceToDevice));
+                CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, ctx->d_XHt, m * k * sizeof(float), cudaMemcpyDeviceToDevice));
             }
         }
 
-        // Step 3: Broadcast reduced results to each GPU (H2D)
-        #pragma omp parallel for num_threads(num_gpus)
-        for (int gpu = 0; gpu < num_gpus; gpu++) {
-            GPUContext* ctx = &contexts[gpu];
-            CUDA_CHECK(cudaSetDevice(ctx->gpu_id));
+        if (do_sync) {
+            // Step 2: CPU-mediated AllReduce (sum reduction)
+            for (int i = 0; i < k * k; i++) h_HHt_global[i] = 0.0f;
+            for (int i = 0; i < m * k; i++) h_XHt_global[i] = 0.0f;
 
-            // Copy reduced HHt and XHt to pre-allocated device buffers (no malloc in loop!)
-            CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
-            CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
+            for (int gpu = 0; gpu < num_gpus; gpu++) {
+                for (int i = 0; i < k * k; i++) {
+                    h_HHt_global[i] += contexts[gpu].h_HHt_pinned[i];
+                }
+                for (int i = 0; i < m * k; i++) {
+                    h_XHt_global[i] += contexts[gpu].h_XHt_pinned[i];
+                }
+            }
+
+            // Step 3: Broadcast reduced results to each GPU (H2D)
+            #pragma omp parallel for num_threads(num_gpus)
+            for (int gpu = 0; gpu < num_gpus; gpu++) {
+                GPUContext* ctx = &contexts[gpu];
+                CUDA_CHECK(cudaSetDevice(ctx->gpu_id));
+                CUDA_CHECK(cudaMemcpy(ctx->d_HHt_global, h_HHt_global, k * k * sizeof(float), cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMemcpy(ctx->d_XHt_global, h_XHt_global, m * k * sizeof(float), cudaMemcpyHostToDevice));
+            }
         }
 
         // End communication timing
@@ -398,7 +395,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
             CUDA_CHECK(cudaDeviceSynchronize());
         }
         auto comm_end = std::chrono::high_resolution_clock::now();
-        iter_comm_ms = std::chrono::duration<float, std::milli>(comm_end - comm_start).count();
+        iter_comm_ms = do_sync ? std::chrono::duration<float, std::milli>(comm_end - comm_start).count() : 0.0f;
         total_comm_ms += iter_comm_ms;
 
         // Step 4: Update W on each GPU (pure compute)
@@ -481,7 +478,7 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
     // Close convergence log
     if (csv_fp) {
         fclose(csv_fp);
-        printf("\nConvergence log saved to results/convergence_mu_l4.csv\n");
+        printf("\nConvergence log saved to results/convergence_mu_l5.csv\n");
         printf("Communication breakdown: compute=%.2f ms (%.1f%%), comm=%.2f ms (%.1f%%)\n",
                total_compute_ms, 100.0f * total_compute_ms / elapsed_ms,
                total_comm_ms, 100.0f * total_comm_ms / elapsed_ms);
@@ -561,20 +558,23 @@ void nmf_multigpu(float* h_X, int m, int n, int k, int max_iter, int num_gpus,
 // Main Function
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [num_gpus] [--log-convergence [interval]]\n", argv[0]);
-        printf("Example: %s data/dense_1000.bin 20 50 2\n", argv[0]);
-        printf("         %s data/dense_1000.bin 20 100 2 --log-convergence 5\n", argv[0]);
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [num_gpus] [sync_interval] [--log-convergence [interval]]\n", argv[0]);
+        printf("Example: %s data/dense_1000.bin 20 50 2 5\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 2 10 --log-convergence 5\n", argv[0]);
+        printf("\nSync interval: 1=sync every iter (like L4), 5=sync every 5 iters (default), etc.\n");
         return 1;
     }
 
     const char* matrix_file = argv[1];
     int k = atoi(argv[2]);
     int max_iter = atoi(argv[3]);
-    int num_gpus = 2;  // Default: 2 GPUs
+    int num_gpus = 2;       // Default: 2 GPUs
+    int sync_interval = 5;  // Default: sync every 5 iterations
     bool log_convergence = false;
     int log_interval = 1;
 
     // Parse optional arguments
+    int positional_count = 0;
     for (int i = 4; i < argc; i++) {
         if (strcmp(argv[i], "--log-convergence") == 0) {
             log_convergence = true;
@@ -583,13 +583,18 @@ int main(int argc, char** argv) {
                 i++;
             }
         } else if (argv[i][0] != '-') {
-            num_gpus = atoi(argv[i]);
+            if (positional_count == 0) {
+                num_gpus = atoi(argv[i]);
+            } else if (positional_count == 1) {
+                sync_interval = atoi(argv[i]);
+            }
+            positional_count++;
         }
     }
 
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════════╗\n");
-    printf("║       CSE587 NMF - LEVEL 4: MULTI-GPU IMPLEMENTATION          ║\n");
+    printf("║       CSE587 NMF - LEVEL 5: ASYNC MULTI-GPU                   ║\n");
     printf("╚════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
 
@@ -599,20 +604,22 @@ int main(int argc, char** argv) {
     load_matrix_binary(matrix_file, &h_X, &m, &n);
     printf("\n");
 
-    // Run multi-GPU NMF
+    // Run async multi-GPU NMF
     float time_ms, bandwidth_gbps, gflops, error;
-    nmf_multigpu(h_X, m, n, k, max_iter, num_gpus, &time_ms, &bandwidth_gbps, &gflops, &error,
-                 log_convergence, log_interval);
+    nmf_multigpu_async(h_X, m, n, k, max_iter, num_gpus, sync_interval,
+                       &time_ms, &bandwidth_gbps, &gflops, &error,
+                       log_convergence, log_interval);
 
     // Save metrics
-    printf("\nSaving metrics to results/multigpu_metrics.txt...\n");
-    FILE* fp = fopen("results/multigpu_metrics.txt", "w");
+    printf("\nSaving metrics to results/async_multigpu_metrics.txt...\n");
+    FILE* fp = fopen("results/async_multigpu_metrics.txt", "w");
     if (fp) {
-        fprintf(fp, "Version: Multi-GPU (Level 4)\n");
+        fprintf(fp, "Version: Async Multi-GPU (Level 5)\n");
         fprintf(fp, "Size: %dx%d\n", m, n);
         fprintf(fp, "Rank: %d\n", k);
         fprintf(fp, "Iterations: %d\n", max_iter);
         fprintf(fp, "GPUs: %d\n", num_gpus);
+        fprintf(fp, "Sync_Interval: %d\n", sync_interval);
         fprintf(fp, "Time: %.2f ms\n", time_ms);
         fprintf(fp, "Final_Error: %.6e\n", error);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
@@ -622,14 +629,14 @@ int main(int argc, char** argv) {
     }
 
     if (log_convergence) {
-        printf("✓ Convergence log saved to results/convergence_mu_l4.csv\n");
+        printf("✓ Convergence log saved to results/convergence_mu_l5.csv\n");
     }
 
     printf("\n");
-    printf("Next steps:\n");
-    printf("1. Compare with single GPU: ./nmf_memory_opt %s %d %d\n", matrix_file, k, max_iter);
-    printf("2. Test scalability with larger matrices\n");
-    printf("3. Analyze communication overhead\n");
+    printf("Test different sync intervals:\n");
+    printf("  sync=1:  %s %s %d %d %d 1   (same as L4)\n", argv[0], matrix_file, k, max_iter, num_gpus);
+    printf("  sync=5:  %s %s %d %d %d 5   (default)\n", argv[0], matrix_file, k, max_iter, num_gpus);
+    printf("  sync=10: %s %s %d %d %d 10  (faster, less accurate)\n", argv[0], matrix_file, k, max_iter, num_gpus);
     printf("\n");
 
     free(h_X);

@@ -3,7 +3,8 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-#include <cusparse.h>
+// Note: cusparse.h removed - only sparse implementations need it
+// Sparse implementations should include <cusparse.h> directly
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -30,14 +31,8 @@
     } \
 }
 
-#define CUSPARSE_CHECK(call) { \
-    cusparseStatus_t status = call; \
-    if (status != CUSPARSE_STATUS_SUCCESS) { \
-        fprintf(stderr, "cuSPARSE Error at %s:%d - code %d\n", \
-                __FILE__, __LINE__, status); \
-        exit(EXIT_FAILURE); \
-    } \
-}
+// Note: CUSPARSE_CHECK moved to sparse implementations that need it
+// Define it locally in sparse files that include <cusparse.h>
 
 // ============================================================================
 // CUDA Timer Class

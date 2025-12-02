@@ -1,7 +1,8 @@
 Version: Memory-Optimized GPU (Level 2)
-Size: 1000x1000
+Size: 32000x32000
 Rank: 20
-Iterations: 50
-Time: 42.44 ms
-Bandwidth: 9.99 GB/s
-GFLOPS: 98.20
+Iterations: 100
+Time: 1520.33 ms
+Bandwidth: 539.84 GB/s
+GFLOPS: 5395.38
+Final_Error: 4.434044e-01

@@ -4,9 +4,11 @@
 # Compiler and Flags
 # ============================================================================
 
-NVCC = /usr/local/cuda/bin/nvcc
+# Use nvcc from PATH (works with module load cuda)
+NVCC = nvcc
 NVCC_FLAGS = -O3 -arch=sm_86 -Xcompiler -Wall
-LIBS = -lcublas -lcusparse
+LIBS = -lcublas
+LIBS_SPARSE = -lcublas -lcusparse
 
 # GPU Architecture:
 # RTX 3050 (local): -arch=sm_86
@@ -27,24 +29,22 @@ UTILS = $(SRC_DIR)/utils.cu
 
 .PHONY: all clean test help levels naive memory-opt compute-opt sparse advanced
 
-# Build all optimization levels
-all: naive memory-opt compute-opt sparse
+# Build all optimization levels (MU + HALS)
+all: naive memory-opt compute-opt multigpu async-multigpu hals
 	@echo ""
 	@echo "╔════════════════════════════════════════════════════╗"
 	@echo "║         Build Complete!                            ║"
 	@echo "╚════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Built optimization levels:"
-	@echo "  ✓ Level 1 (naive): Baseline dense GPU"
-	@echo "  ✓ Level 2 (memory-opt): Kernel fusion + 4-way ILP"
-	@echo "  ✓ Level 3 (compute-opt): 8-way ILP + block tuning"
-	@echo "  ✓ Sparse variants: CSR format implementations"
-	@echo ""
-	@echo "Quick test:"
-	@echo "  ./nmf_naive data/dense_1000.bin 20 50"
-	@echo "  ./nmf_memory_opt data/dense_1000.bin 20 50"
-	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50"
-	@echo "  ./nmf_compute_opt data/dense_1000.bin 20 50 --tune  # Test block sizes"
+	@echo "Built implementations:"
+	@echo "  ✓ MU L1 Naive: Custom naive GEMM baseline"
+	@echo "  ✓ MU L2 Memory: cuBLAS + fused kernels"
+	@echo "  ✓ MU L3 Compute: cuBLAS + 8-way ILP"
+	@echo "  ✓ MU L4 MultiGPU: Data parallel, sync every iter"
+	@echo "  ✓ MU L5 Async: Data parallel, configurable sync"
+	@echo "  ✓ HALS CPU: Sequential baseline"
+	@echo "  ✓ HALS GPU Strict: Gauss-Seidel parallelism"
+	@echo "  ✓ HALS GPU Block: Block-parallel with shuffling"
 	@echo ""
 
 # Build levels individually
@@ -109,13 +109,13 @@ sparse: nmf_sparse nmf_sparse_transpose nmf_sparse_hybrid
 	@echo "✓ All sparse variants built"
 
 nmf_sparse: $(SRC_DIR)/nmf_sparse_gpu.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 nmf_sparse_transpose: $(SRC_DIR)/nmf_sparse_gpu_v3_transpose.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 nmf_sparse_hybrid: $(SRC_DIR)/nmf_sparse_gpu_v3.cu $(UTILS)
-	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS_SPARSE)
 
 # Backwards compatibility
 nmf_sparse_gpu: nmf_sparse
@@ -136,6 +136,20 @@ level4: multigpu
 advanced: multigpu
 nmf_advanced: multigpu
 
+# ============================================================================
+# Level 5: Async Multi-GPU with Configurable Sync Interval
+# ============================================================================
+
+async-multigpu: nmf_async_multigpu
+	@echo "✓ Level 5: Async Multi-GPU version built"
+
+nmf_async_multigpu: $(SRC_DIR)/mu/nmf_dense_gpu_v5_async.cu $(UTILS)
+	@echo "Building Level 5: Async Multi-GPU with sync interval..."
+	$(NVCC) $(NVCC_FLAGS) -Xcompiler -fopenmp $^ -o $@ $(LIBS)
+
+# Backwards compatibility
+level5: async-multigpu
+
 nmf_sparse_gpu_v2: $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu $(UTILS)
 	@if [ -f $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu ]; then \
 		$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS); \
@@ -154,8 +168,24 @@ nmf_hals_cpu: $(SRC_DIR)/hals/nmf_hals_cpu.cpp
 	@echo "Building HALS CPU baseline (C++ with column-major indexing)..."
 	g++ -std=c++11 -O3 -o $@ $(SRC_DIR)/hals/nmf_hals_cpu.cpp -lm
 
+hals-gpu-strict: nmf_hals_gpu_strict
+	@echo "✓ HALS GPU Level 1: Strict single-column parallelism built"
+
+nmf_hals_gpu_strict: $(SRC_DIR)/hals/nmf_hals_gpu_v1_strict.cu $(UTILS)
+	@echo "Building HALS GPU Level 1 (strict Gauss-Seidel)..."
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
+hals-gpu-block: nmf_hals_gpu_block
+	@echo "✓ HALS GPU Level 2: Block-parallel with random shuffling built"
+
+nmf_hals_gpu_block: $(SRC_DIR)/hals/nmf_hals_gpu_v2_block.cu $(UTILS)
+	@echo "Building HALS GPU Level 2 (block-parallel)..."
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(LIBS)
+
 # Backwards compatibility
 hals: hals-cpu
+hals-gpu: hals-gpu-strict
+hals-all: hals-cpu hals-gpu-strict hals-gpu-block
 
 # ============================================================================
 # Original simple targets (for backward compatibility)
@@ -267,10 +297,10 @@ analyze:
 # ============================================================================
 
 clean:
-	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
+	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_async_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
 	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
-	rm -f nmf_hals_cpu  # HALS CPU baseline
+	rm -f nmf_hals_cpu nmf_hals_gpu_strict nmf_hals_gpu_block  # HALS implementations
 	rm -f *.o
 	@echo "✓ Cleaned executables"
 

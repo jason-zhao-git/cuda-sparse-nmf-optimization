@@ -15,7 +15,6 @@ data/*.npz
 data/*.txt
 
 # Results
-results/*.csv
 results/*.log
 results/plots/*.png
 results/profiles/*.ncu-rep

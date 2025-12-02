@@ -1,30 +1,30 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
- * LEVEL 3: COMPUTE-OPTIMIZED GPU IMPLEMENTATION WITH CUDA STREAMS
+ * LEVEL 3: COMPUTE-OPTIMIZED GPU IMPLEMENTATION WITH 8-WAY ILP
  *
- * Purpose: Push optimization further with concurrent execution
+ * Purpose: Show element-wise kernel optimization impact
  *
  * Optimizations Beyond Level 2:
- * 1. 8-way ILP (vs 4-way in Level 2) - More latency hiding
- * 2. CUDA Streams - Concurrent execution of independent operations
- * 3. Event-based synchronization - Fine-grained dependency management
- * 4. Block size tuning - Test multiple configurations
+ * 1. 8-way ILP (vs 1 element/thread in Level 2) - More latency hiding
+ * 2. Fused element-wise kernels - Reduced kernel launch overhead
+ * 3. Block size tuning - Test multiple configurations
  *
  * Expected Performance:
- * - 10-20% improvement over Level 2 (combined ILP + streams)
- * - Streams allow overlap of WtW and WtX computations
- * - Event-based sync reduces synchronization overhead
- * - Demonstrates hitting Amdahl's Law limits (cuBLAS still dominates)
+ * - Small improvement over Level 2 (cuBLAS dominates runtime)
+ * - Demonstrates hitting Amdahl's Law limits
+ * - Element-wise ops are <5% of total compute, so ILP gains are minimal
  *
- * This level exists to show WHY we can't optimize further,
- * justifying exploration of algorithmic alternatives (multi-GPU, sparse).
+ * Key insight: The real speedup comes from L1→L2 (naive→cuBLAS),
+ * not L2→L3 (simple→ILP element-wise). This demonstrates why
+ * optimized libraries matter more than micro-optimizations.
  */
 
 
-// 8-way ILP Fused Kernel (vs 4-way in Level 2)
+// 8-way ILP Fused Kernel (vs 1 element/thread in Level 2)
 
 
 __global__ void elementwise_multiply_divide_fused_ilp8(
@@ -100,18 +100,18 @@ __global__ void elementwise_multiply_divide_fused_ilp8(
 
 
 void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int block_size,
-                         float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                         float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                         float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
-    printf("LEVEL 3: COMPUTE-OPTIMIZED GPU + STREAMS\n");
+    printf("LEVEL 3: cuBLAS GPU + 8-WAY ILP\n");
     printf("========================================\n");
     printf("Matrix: %dx%d, Rank: %d, Iterations: %d\n", m, n, k, max_iter);
     printf("Optimizations:\n");
-    printf("  - 8-way ILP (vs 4-way in Level 2)\n");
-    printf("  - CUDA Streams (3 concurrent streams)\n");
-    printf("  - Event-based synchronization\n");
+    printf("  - cuBLAS for GEMM (same as L2)\n");
+    printf("  - 8-way ILP element-wise (vs 1/thread in L2)\n");
+    printf("  - Fused multiply/divide kernel\n");
     printf("  - Block size: %d threads (tunable)\n", block_size);
-    printf("Expected: 10-20%% improvement over Level 2\n");
     printf("----------------------------------------\n");
 
 
@@ -153,38 +153,6 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
 
-
-    // Create CUDA streams for concurrent execution
-
-
-    cudaStream_t stream_gemm1, stream_gemm2, stream_elementwise;
-    CUDA_CHECK(cudaStreamCreate(&stream_gemm1));
-    CUDA_CHECK(cudaStreamCreate(&stream_gemm2));
-    CUDA_CHECK(cudaStreamCreate(&stream_elementwise));
-
-
-    // Create cuBLAS handles for each GEMM stream
-
-
-    cublasHandle_t cublas_handle1, cublas_handle2;
-    CUBLAS_CHECK(cublasCreate(&cublas_handle1));
-    CUBLAS_CHECK(cublasCreate(&cublas_handle2));
-    CUBLAS_CHECK(cublasSetStream(cublas_handle1, stream_gemm1));
-    CUBLAS_CHECK(cublasSetStream(cublas_handle2, stream_gemm2));
-
-
-    // Create events for fine-grained synchronization
-
-
-    cudaEvent_t event_WtW, event_WtX, event_temp_H;
-    cudaEvent_t event_HHt, event_XHt, event_temp_W;
-    CUDA_CHECK(cudaEventCreate(&event_WtW));
-    CUDA_CHECK(cudaEventCreate(&event_WtX));
-    CUDA_CHECK(cudaEventCreate(&event_temp_H));
-    CUDA_CHECK(cudaEventCreate(&event_HHt));
-    CUDA_CHECK(cudaEventCreate(&event_XHt));
-    CUDA_CHECK(cudaEventCreate(&event_temp_W));
-
     float alpha = 1.0f;
     float beta = 0.0f;
 
@@ -197,18 +165,23 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     int grid_size_W = ((m * k) + (block_size * 8) - 1) / (block_size * 8);
 
     printf("\nKernel Configuration:\n");
-    printf("  Block size: %d threads (user-configurable)\n", block_size);
+    printf("  Block size: %d threads\n", block_size);
     printf("  Grid size H: %d blocks\n", grid_size_H);
     printf("  Grid size W: %d blocks\n", grid_size_W);
-    printf("  ILP factor: 8 elements/thread (vs 4 in Level 2)\n");
-    printf("  CUDA streams: 3 (concurrent GEMM + elementwise)\n");
-    printf("  Synchronization: Event-based (fine-grained)\n");
-    printf("  Expected gain: 10-20%% (ILP + streams)\n");
+    printf("  ILP factor: 8 elements/thread (vs 1 in Level 2)\n");
     printf("----------------------------------------\n\n");
 
 
     // Main iteration loop
 
+    // Convergence logging setup
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_mu_l3.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,time_ms\n");
+        }
+    }
 
     CudaTimer timer;
     timer.startTimer();
@@ -218,93 +191,93 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
         // Update H: H = H .* (W^T × X) ./ (W^T × W × H + eps)
         // ====================================================================
 
-        // Wait for previous W update to complete (if not first iteration)
-        if (iter > 0) {
-            CUDA_CHECK(cudaStreamWaitEvent(stream_gemm1, event_temp_W, 0));
-            CUDA_CHECK(cudaStreamWaitEvent(stream_gemm2, event_temp_W, 0));
-        }
-
-        // 1. WtW = W^T × W (stream 1)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle1,
+        // 1. WtW = W^T × W
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_T, CUBLAS_OP_N,
                                  k, k, m,
                                  &alpha, d_W, m, d_W, m,
                                  &beta, d_WtW, k));
 
-        // 2. WtX = W^T × X (stream 2, concurrent with WtW)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle2,
+        // 2. WtX = W^T × X
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_T, CUBLAS_OP_N,
                                  k, n, m,
                                  &alpha, d_W, m, d_X, m,
                                  &beta, d_WtX, k));
-        CUDA_CHECK(cudaEventRecord(event_WtX, stream_gemm2));
 
-        // 3. temp_H = WtW × H (stream 1, automatically serialized after WtW)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle1,
+        // 3. temp_H = WtW × H
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_N, CUBLAS_OP_N,
                                  k, n, k,
                                  &alpha, d_WtW, k, d_H, k,
                                  &beta, d_temp_H, k));
-        CUDA_CHECK(cudaEventRecord(event_temp_H, stream_gemm1));
 
         // 4. FUSED + 8-WAY ILP: H = H .* WtX ./ (temp_H + eps)
-        // Wait for both WtX and temp_H to complete
-        CUDA_CHECK(cudaStreamWaitEvent(stream_elementwise, event_WtX, 0));
-        CUDA_CHECK(cudaStreamWaitEvent(stream_elementwise, event_temp_H, 0));
-        elementwise_multiply_divide_fused_ilp8<<<grid_size_H, block_size, 0, stream_elementwise>>>(
+        elementwise_multiply_divide_fused_ilp8<<<grid_size_H, block_size>>>(
             d_H, d_WtX, d_temp_H, k * n, 1e-10f
         );
-        CUDA_CHECK(cudaEventRecord(event_temp_H, stream_elementwise));  // Reuse event to signal H is updated
 
         // ====================================================================
         // Update W: W = W .* (X × H^T) ./ (W × H × H^T + eps)
         // ====================================================================
 
-        // CRITICAL: Wait for H update to complete before reading H
-        CUDA_CHECK(cudaStreamWaitEvent(stream_gemm1, event_temp_H, 0));
-        CUDA_CHECK(cudaStreamWaitEvent(stream_gemm2, event_temp_H, 0));
-
-        // 1. HHt = H × H^T (stream 1)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle1,
+        // 1. HHt = H × H^T
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_N, CUBLAS_OP_T,
                                  k, k, n,
                                  &alpha, d_H, k, d_H, k,
                                  &beta, d_HHt, k));
 
-        // 2. XHt = X × H^T (stream 2, concurrent with HHt)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle2,
+        // 2. XHt = X × H^T
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_N, CUBLAS_OP_T,
                                  m, k, n,
                                  &alpha, d_X, m, d_H, k,
                                  &beta, d_XHt, m));
-        CUDA_CHECK(cudaEventRecord(event_XHt, stream_gemm2));
 
-        // 3. temp_W = W × HHt (stream 1, automatically serialized after HHt)
-        CUBLAS_CHECK(cublasSgemm(cublas_handle1,
+        // 3. temp_W = W × HHt
+        CUBLAS_CHECK(cublasSgemm(handle,
                                  CUBLAS_OP_N, CUBLAS_OP_N,
                                  m, k, k,
                                  &alpha, d_W, m, d_HHt, k,
                                  &beta, d_temp_W, m));
-        CUDA_CHECK(cudaEventRecord(event_temp_W, stream_gemm1));
 
         // 4. FUSED + 8-WAY ILP: W = W .* XHt ./ (temp_W + eps)
-        // Wait for both XHt and temp_W to complete
-        CUDA_CHECK(cudaStreamWaitEvent(stream_elementwise, event_XHt, 0));
-        CUDA_CHECK(cudaStreamWaitEvent(stream_elementwise, event_temp_W, 0));
-        elementwise_multiply_divide_fused_ilp8<<<grid_size_W, block_size, 0, stream_elementwise>>>(
+        elementwise_multiply_divide_fused_ilp8<<<grid_size_W, block_size>>>(
             d_W, d_XHt, d_temp_W, m * k, 1e-10f
         );
-        CUDA_CHECK(cudaEventRecord(event_temp_W, stream_elementwise));  // Reuse event to signal W is updated
 
-        if (iter % 10 == 0) {
+        // Per-iteration convergence logging
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            cudaDeviceSynchronize();
+            float iter_time_ms = timer.stopTimer();
+
+            // Copy current W, H to host for error computation
+            CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
+
+            float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.2f\n", iter, error, iter_time_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, time=%.2f ms\n", iter, error, iter_time_ms);
+
+            // Restart timer for next interval
+            timer.startTimer();
+        } else if (iter % 10 == 0) {
             printf("Iteration %d\n", iter);
         }
     }
 
-    // Synchronize all streams before stopping timer
-    CUDA_CHECK(cudaDeviceSynchronize());
-
     float elapsed_ms = timer.stopTimer();
+
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("Convergence log saved to results/convergence_mu_l3.csv\n");
+    }
 
 
     // Copy results back
@@ -370,28 +343,13 @@ void nmf_compute_opt_gpu(float* h_X, int m, int n, int k, int max_iter, int bloc
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
 
     // Cleanup
 
 
-    // Destroy cuBLAS handles
     CUBLAS_CHECK(cublasDestroy(handle));
-    CUBLAS_CHECK(cublasDestroy(cublas_handle1));
-    CUBLAS_CHECK(cublasDestroy(cublas_handle2));
-
-    // Destroy CUDA streams
-    CUDA_CHECK(cudaStreamDestroy(stream_gemm1));
-    CUDA_CHECK(cudaStreamDestroy(stream_gemm2));
-    CUDA_CHECK(cudaStreamDestroy(stream_elementwise));
-
-    // Destroy CUDA events
-    CUDA_CHECK(cudaEventDestroy(event_WtW));
-    CUDA_CHECK(cudaEventDestroy(event_WtX));
-    CUDA_CHECK(cudaEventDestroy(event_temp_H));
-    CUDA_CHECK(cudaEventDestroy(event_HHt));
-    CUDA_CHECK(cudaEventDestroy(event_XHt));
-    CUDA_CHECK(cudaEventDestroy(event_temp_W));
 
     cudaFree(d_X);
     cudaFree(d_W);
@@ -436,8 +394,9 @@ void test_block_sizes(float* h_X, int m, int n, int k, int max_iter) {
         printf("Testing block size: %d threads/block\n", bs);
         printf("----------------------------------------\n");
 
-        float time_ms, bandwidth, gflops;
-        nmf_compute_opt_gpu(h_X, m, n, k, max_iter, bs, &time_ms, &bandwidth, &gflops);
+        float time_ms, bandwidth, gflops, final_error;
+        nmf_compute_opt_gpu(h_X, m, n, k, max_iter, bs, &time_ms, &bandwidth, &gflops,
+                            &final_error, false, 1);
 
         if (time_ms < best_time) {
             best_time = time_ms;
@@ -466,9 +425,10 @@ void test_block_sizes(float* h_X, int m, int n, int k, int max_iter) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size] [--tune]\n", argv[0]);
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [block_size] [--tune] [--log-convergence [interval]]\n", argv[0]);
         printf("Example: %s data/dense_1000.bin 20 50 128\n", argv[0]);
         printf("         %s data/dense_1000.bin 20 50 --tune   (test multiple block sizes)\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 128 --log-convergence 5\n", argv[0]);
         return 1;
     }
 
@@ -478,12 +438,21 @@ int main(int argc, char** argv) {
 
     bool tune_mode = false;
     int block_size = 128;  // Default
+    bool log_convergence = false;
+    int log_interval = 1;
 
-    if (argc >= 5) {
-        if (strcmp(argv[4], "--tune") == 0) {
+    // Parse arguments
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--tune") == 0) {
             tune_mode = true;
-        } else {
-            block_size = atoi(argv[4]);
+        } else if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (argv[i][0] != '-') {
+            block_size = atoi(argv[i]);
         }
     }
 
@@ -504,8 +473,9 @@ int main(int argc, char** argv) {
         test_block_sizes(h_X, m, n_dim, k, max_iter);
     } else {
         // Single run with specified block size
-        float time_ms, bandwidth_gbps, gflops;
-        nmf_compute_opt_gpu(h_X, m, n_dim, k, max_iter, block_size, &time_ms, &bandwidth_gbps, &gflops);
+        float time_ms, bandwidth_gbps, gflops, final_error;
+        nmf_compute_opt_gpu(h_X, m, n_dim, k, max_iter, block_size, &time_ms, &bandwidth_gbps, &gflops,
+                            &final_error, log_convergence, log_interval);
 
         // Save metrics for comparison
         printf("\nSaving metrics to results/compute_opt_metrics.txt...\n");
@@ -519,8 +489,13 @@ int main(int argc, char** argv) {
             fprintf(fp, "Time: %.2f ms\n", time_ms);
             fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
             fprintf(fp, "GFLOPS: %.2f\n", gflops);
+            fprintf(fp, "Final_Error: %.6e\n", final_error);
             fclose(fp);
             printf("✓ Metrics saved\n");
+        }
+
+        if (log_convergence) {
+            printf("✓ Convergence log saved to results/convergence_mu_l3.csv\n");
         }
     }
 

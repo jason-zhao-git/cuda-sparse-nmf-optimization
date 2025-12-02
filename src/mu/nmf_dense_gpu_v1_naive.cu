@@ -3,30 +3,78 @@
 #include <stdlib.h>
 
 /*
- * LEVEL 1: NAIVE GPU IMPLEMENTATION
+ * LEVEL 1: NAIVE GPU IMPLEMENTATION (NO cuBLAS)
  *
- * Purpose: Establish GPU baseline with minimal optimization
+ * Purpose: Establish slow baseline to demonstrate optimization impact
  *
  * Characteristics:
- * - Uses cuBLAS for all matrix operations
- * - Simple element-wise kernels (no optimization)
- * - No shared memory usage
- * - No memory coalescing considerations
- * - Basic thread block size
+ * - Custom naive GEMM kernels (no cuBLAS)
+ * - 1 thread per output element
+ * - No shared memory, no tiling
+ * - Simple element-wise kernels
  *
  * Expected Performance:
- * - 10-30x speedup over CPU
- * - Low memory bandwidth utilization (~30-40%)
- * - Low occupancy (~40-60%)
+ * - SLOW (10-50x slower than cuBLAS)
+ * - Shows why optimized libraries matter
+ * - Educational baseline
  *
  */
 
- 
+
+// Naive GEMM: C = A × B
+// Each thread computes one element of C
+// A: M×K, B: K×N, C: M×N (column-major)
+__global__ void naive_gemm(const float* A, const float* B, float* C,
+                           int M, int N, int K, int lda, int ldb, int ldc) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        for (int i = 0; i < K; i++) {
+            sum += A[row + i * lda] * B[i + col * ldb];
+        }
+        C[row + col * ldc] = sum;
+    }
+}
+
+// Naive GEMM: C = A^T × B
+__global__ void naive_gemm_atb(const float* A, const float* B, float* C,
+                               int M, int N, int K, int lda, int ldb, int ldc) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        for (int i = 0; i < K; i++) {
+            // A^T[row,i] = A[i,row] = A[i + row*lda]
+            sum += A[i + row * lda] * B[i + col * ldb];
+        }
+        C[row + col * ldc] = sum;
+    }
+}
+
+// Naive GEMM: C = A × B^T
+__global__ void naive_gemm_abt(const float* A, const float* B, float* C,
+                               int M, int N, int K, int lda, int ldb, int ldc) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        for (int i = 0; i < K; i++) {
+            // B^T[i,col] = B[col,i] = B[col + i*ldb]
+            sum += A[row + i * lda] * B[col + i * ldb];
+        }
+        C[row + col * ldc] = sum;
+    }
+}
+
+
 // Element-wise Kernels (No optimization)
- 
+
 
 __global__ void elementwise_multiply_naive(float* A, float* B, float* C, int size) {
-    // Simple 1D indexing, no optimization
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         C[idx] = A[idx] * B[idx];
@@ -35,7 +83,6 @@ __global__ void elementwise_multiply_naive(float* A, float* B, float* C, int siz
 
 __global__ void elementwise_divide_eps_naive(float* A, float* B, float* C, int size, float eps) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
     if (idx < size) {
         C[idx] = A[idx] / (B[idx] + eps);
     }
@@ -87,21 +134,22 @@ void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
     CUDA_CHECK(cudaMemcpy(d_W, h_W, m * k * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_H, h_H, k * n * sizeof(float), cudaMemcpyHostToDevice));
 
-     
-    // Create cuBLAS handle
-     
 
-    cublasHandle_t handle;
-    CUBLAS_CHECK(cublasCreate(&handle));
-
-    float alpha = 1.0f;
-    float beta = 0.0f;
-
-     
     // Naive kernel configuration (not optimized)
-     
+    // Using 16x16 thread blocks for GEMM (256 threads per block)
 
-    // Using fixed 128 threads per block (not optimized for occupancy)
+
+    dim3 block_2d(16, 16);  // 256 threads per block
+
+    // Grid dimensions for each GEMM operation
+    dim3 grid_WtW((k + 15) / 16, (k + 15) / 16);      // k×k output
+    dim3 grid_WtX((n + 15) / 16, (k + 15) / 16);      // k×n output
+    dim3 grid_WtWH((n + 15) / 16, (k + 15) / 16);     // k×n output (same as WtX)
+    dim3 grid_HHt((k + 15) / 16, (k + 15) / 16);      // k×k output
+    dim3 grid_XHt((k + 15) / 16, (m + 15) / 16);      // m×k output
+    dim3 grid_WHHt((k + 15) / 16, (m + 15) / 16);     // m×k output (same as XHt)
+
+    // 1D grid for element-wise operations
     int block_size = 128;
     int grid_size_H = (k * n + block_size - 1) / block_size;
     int grid_size_W = (m * k + block_size - 1) / block_size;
@@ -122,29 +170,23 @@ void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
     timer.startTimer();
 
     for (int iter = 0; iter < max_iter; iter++) {
-          
+
         // Update H: H = H .* (W^T × X) ./ (W^T × W × H + eps)
 
-        // 1. WtW = W^T × W (using cuBLAS, no custom optimization)
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_T, CUBLAS_OP_N,
-                                 k, k, m,
-                                 &alpha, d_W, m, d_W, m,
-                                 &beta, d_WtW, k));
+        // 1. WtW = W^T × W (naive GEMM: A^T × B)
+        // Output: k×k, W is m×k, so W^T is k×m
+        naive_gemm_atb<<<grid_WtW, block_2d>>>(d_W, d_W, d_WtW,
+                                               k, k, m, m, m, k);
 
-        // 2. WtX = W^T × X (using cuBLAS)
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_T, CUBLAS_OP_N,
-                                 k, n, m,
-                                 &alpha, d_W, m, d_X, m,
-                                 &beta, d_WtX, k));
+        // 2. WtX = W^T × X (naive GEMM: A^T × B)
+        // Output: k×n, W^T is k×m, X is m×n
+        naive_gemm_atb<<<grid_WtX, block_2d>>>(d_W, d_X, d_WtX,
+                                               k, n, m, m, m, k);
 
-        // 3. temp_H = WtW × H (using cuBLAS)
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_N, CUBLAS_OP_N,
-                                 k, n, k,
-                                 &alpha, d_WtW, k, d_H, k,
-                                 &beta, d_temp_H, k));
+        // 3. temp_H = WtW × H (naive GEMM: A × B)
+        // Output: k×n, WtW is k×k, H is k×n
+        naive_gemm<<<grid_WtWH, block_2d>>>(d_WtW, d_H, d_temp_H,
+                                            k, n, k, k, k, k);
 
         // 4. H = H .* WtX (naive kernel)
         elementwise_multiply_naive<<<grid_size_H, block_size>>>(d_H, d_WtX, d_H, k * n);
@@ -152,30 +194,24 @@ void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
         // 5. H = H ./ (temp_H + eps) (naive kernel)
         elementwise_divide_eps_naive<<<grid_size_H, block_size>>>(d_H, d_temp_H, d_H, k * n, 1e-10f);
 
-          
+
         // Update W: W = W .* (X × H^T) ./ (W × H × H^T + eps)
-          
 
-        // 1. HHt = H × H^T
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_N, CUBLAS_OP_T,
-                                 k, k, n,
-                                 &alpha, d_H, k, d_H, k,
-                                 &beta, d_HHt, k));
 
-        // 2. XHt = X × H^T
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_N, CUBLAS_OP_T,
-                                 m, k, n,
-                                 &alpha, d_X, m, d_H, k,
-                                 &beta, d_XHt, m));
+        // 1. HHt = H × H^T (naive GEMM: A × B^T)
+        // Output: k×k, H is k×n
+        naive_gemm_abt<<<grid_HHt, block_2d>>>(d_H, d_H, d_HHt,
+                                               k, k, n, k, k, k);
 
-        // 3. temp_W = W × HHt
-        CUBLAS_CHECK(cublasSgemm(handle,
-                                 CUBLAS_OP_N, CUBLAS_OP_N,
-                                 m, k, k,
-                                 &alpha, d_W, m, d_HHt, k,
-                                 &beta, d_temp_W, m));
+        // 2. XHt = X × H^T (naive GEMM: A × B^T)
+        // Output: m×k, X is m×n, H is k×n
+        naive_gemm_abt<<<grid_XHt, block_2d>>>(d_X, d_H, d_XHt,
+                                               m, k, n, m, k, m);
+
+        // 3. temp_W = W × HHt (naive GEMM: A × B)
+        // Output: m×k, W is m×k, HHt is k×k
+        naive_gemm<<<grid_WHHt, block_2d>>>(d_W, d_HHt, d_temp_W,
+                                            m, k, k, m, k, m);
 
         // 4. W = W .* XHt (naive kernel)
         elementwise_multiply_naive<<<grid_size_W, block_size>>>(d_W, d_XHt, d_W, m * k);
@@ -251,11 +287,9 @@ void nmf_naive_gpu(float* h_X, int m, int n, int k, int max_iter,
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
 
-     
-    // Cleanup
-     
 
-    CUBLAS_CHECK(cublasDestroy(handle));
+    // Cleanup
+
 
     cudaFree(d_X);
     cudaFree(d_W);

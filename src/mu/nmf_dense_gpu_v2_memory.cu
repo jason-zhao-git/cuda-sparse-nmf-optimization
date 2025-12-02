@@ -1,74 +1,39 @@
 #include "../utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
- * LEVEL 2: MEMORY-OPTIMIZED GPU IMPLEMENTATION
+ * LEVEL 2: cuBLAS GPU IMPLEMENTATION (NO ILP)
  *
- * Purpose: Optimize memory access patterns and bandwidth utilization
+ * Purpose: Show speedup from using optimized BLAS library (vs L1 naive GEMM)
  *
- * Memory Optimizations:
- * 1. Kernel fusion: Combine multiply and divide (reduce memory traffic)
- * 2. ILP: Process 4 elements per thread (hide memory latency)
- * 3. Coalesced memory access (consecutive threads → consecutive memory)
+ * Optimizations:
+ * 1. cuBLAS for GEMM operations (vs custom naive GEMM in L1)
+ * 2. Simple fused element-wise kernel (NO ILP)
  *
  * Expected Performance:
- * - 1.5-3x speedup over naive
- * - Better memory bandwidth utilization
- * - Reduced kernel launch overhead
+ * - 10-50x speedup over L1 naive GEMM
+ * - Demonstrates impact of optimized libraries
+ * - GEMM is now fast, element-wise is the bottleneck
  *
  */
 
 
-// Memory-Optimized Fused Kernel with ILP
+// Simple fused element-wise kernel (NO ILP)
+// Each thread processes one element
 
 
-__global__ void elementwise_multiply_divide_fused_ilp(
+__global__ void elementwise_multiply_divide_fused_simple(
     float* input,       // Input array to be updated
     float* numerator,   // Multiply by this
     float* denominator, // Divide by this
     int size,
     float eps
 ) {
-    // ILP: Each thread processes 4 consecutive elements
-    // This hides memory latency by overlapping loads/stores with compute
-    int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
-
-    // Process 4 elements if possible
-    if (idx + 3 < size) {
-        // Load 4 elements (memory operations start in parallel)
-        float in0 = input[idx];
-        float in1 = input[idx + 1];
-        float in2 = input[idx + 2];
-        float in3 = input[idx + 3];
-
-        float num0 = numerator[idx];
-        float num1 = numerator[idx + 1];
-        float num2 = numerator[idx + 2];
-        float num3 = numerator[idx + 3];
-
-        float den0 = denominator[idx];
-        float den1 = denominator[idx + 1];
-        float den2 = denominator[idx + 2];
-        float den3 = denominator[idx + 3];
-
-        // Compute all 4 (independent operations = ILP!)
-        // While waiting for memory, GPU can execute these
-        in0 = in0 * num0 / (den0 + eps);
-        in1 = in1 * num1 / (den1 + eps);
-        in2 = in2 * num2 / (den2 + eps);
-        in3 = in3 * num3 / (den3 + eps);
-
-        // Store 4 elements
-        input[idx] = in0;
-        input[idx + 1] = in1;
-        input[idx + 2] = in2;
-        input[idx + 3] = in3;
-    } else {
-        // Handle remaining elements
-        for (int i = idx; i < size && i < idx + 4; i++) {
-            input[i] = input[i] * numerator[i] / (denominator[i] + eps);
-        }
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        input[idx] = input[idx] * numerator[idx] / (denominator[idx] + eps);
     }
 }
 
@@ -77,16 +42,17 @@ __global__ void elementwise_multiply_divide_fused_ilp(
 
 
 void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
-                        float* time_ms, float* bandwidth_achieved, float* flops_achieved) {
+                        float* time_ms, float* bandwidth_achieved, float* flops_achieved,
+                        float* final_error, bool log_convergence, int log_interval) {
 
     printf("========================================\n");
-    printf("LEVEL 2: MEMORY-OPTIMIZED GPU\n");
+    printf("LEVEL 2: cuBLAS GPU (NO ILP)\n");
     printf("========================================\n");
     printf("Matrix: %dx%d, Rank: %d, Iterations: %d\n", m, n, k, max_iter);
-    printf("Memory Optimizations:\n");
-    printf("  - Kernel fusion (2 kernels → 1)\n");
-    printf("  - ILP: 4 elements per thread\n");
-    printf("  - Coalesced memory access\n");
+    printf("Optimizations:\n");
+    printf("  - cuBLAS for GEMM (vs naive GEMM in L1)\n");
+    printf("  - Simple fused element-wise kernel\n");
+    printf("  - NO ILP (1 element per thread)\n");
     printf("----------------------------------------\n");
 
 
@@ -132,25 +98,32 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     float beta = 0.0f;
 
 
-    // Kernel configuration with ILP
+    // Kernel configuration (NO ILP - 1 element per thread)
 
 
-    // Each thread processes 4 elements, so we need 1/4 the threads
     int block_size = 128;
-    int grid_size_H = ((k * n) + (block_size * 4) - 1) / (block_size * 4);
-    int grid_size_W = ((m * k) + (block_size * 4) - 1) / (block_size * 4);
+    int grid_size_H = (k * n + block_size - 1) / block_size;
+    int grid_size_W = (m * k + block_size - 1) / block_size;
 
     printf("\nKernel Configuration:\n");
     printf("  Block size: %d threads\n", block_size);
     printf("  Grid size H: %d blocks\n", grid_size_H);
     printf("  Grid size W: %d blocks\n", grid_size_W);
-    printf("  ILP factor: 4 elements/thread\n");
-    printf("  Kernel launches per iter: 2 (vs 4 naive)\n");
+    printf("  Elements per thread: 1 (no ILP)\n");
+    printf("  Kernel launches per iter: 2 (fused multiply/divide)\n");
     printf("----------------------------------------\n\n");
 
 
     // Main iteration loop
 
+    // Convergence logging setup
+    FILE* csv_fp = NULL;
+    if (log_convergence) {
+        csv_fp = fopen("results/convergence_mu_l2.csv", "w");
+        if (csv_fp) {
+            fprintf(csv_fp, "iteration,error,time_ms\n");
+        }
+    }
 
     CudaTimer timer;
     timer.startTimer();
@@ -181,8 +154,8 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
                                  &alpha, d_WtW, k, d_H, k,
                                  &beta, d_temp_H, k));
 
-        // 4. FUSED + ILP: H = H .* WtX ./ (temp_H + eps) in ONE kernel
-        elementwise_multiply_divide_fused_ilp<<<grid_size_H, block_size>>>(
+        // 4. FUSED: H = H .* WtX ./ (temp_H + eps) in ONE kernel (no ILP)
+        elementwise_multiply_divide_fused_simple<<<grid_size_H, block_size>>>(
             d_H, d_WtX, d_temp_H, k * n, 1e-10f
         );
 
@@ -211,18 +184,42 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
                                  &alpha, d_W, m, d_HHt, k,
                                  &beta, d_temp_W, m));
 
-        // 4. FUSED + ILP: W = W .* XHt ./ (temp_W + eps) in ONE kernel
-        elementwise_multiply_divide_fused_ilp<<<grid_size_W, block_size>>>(
+        // 4. FUSED: W = W .* XHt ./ (temp_W + eps) in ONE kernel (no ILP)
+        elementwise_multiply_divide_fused_simple<<<grid_size_W, block_size>>>(
             d_W, d_XHt, d_temp_W, m * k, 1e-10f
         );
 
-        if (iter % 10 == 0) {
+        // Per-iteration convergence logging
+        if (log_convergence && (iter % log_interval == 0 || iter == max_iter - 1)) {
+            cudaDeviceSynchronize();
+            float iter_time_ms = timer.stopTimer();
+
+            // Copy current W, H to host for error computation
+            CUDA_CHECK(cudaMemcpy(h_W, d_W, m * k * sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_H, d_H, k * n * sizeof(float), cudaMemcpyDeviceToHost));
+
+            float error = compute_relative_error_dense(h_X, h_W, h_H, m, n, k);
+
+            if (csv_fp) {
+                fprintf(csv_fp, "%d,%.6e,%.2f\n", iter, error, iter_time_ms);
+                fflush(csv_fp);
+            }
+            printf("Iteration %d: error=%.6e, time=%.2f ms\n", iter, error, iter_time_ms);
+
+            // Restart timer for next interval
+            timer.startTimer();
+        } else if (iter % 10 == 0) {
             printf("Iteration %d\n", iter);
         }
     }
 
     float elapsed_ms = timer.stopTimer();
 
+    // Close convergence log
+    if (csv_fp) {
+        fclose(csv_fp);
+        printf("Convergence log saved to results/convergence_mu_l2.csv\n");
+    }
 
     // Copy results back
 
@@ -269,7 +266,7 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
 
 
     printf("========================================\n");
-    printf("MEMORY-OPTIMIZED GPU RESULTS\n");
+    printf("cuBLAS GPU RESULTS (NO ILP)\n");
     printf("========================================\n");
     printf("Time: %.2f ms\n", elapsed_ms);
     printf("FLOPS: %.2f GFLOPS\n", gflops);
@@ -277,17 +274,18 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
     printf("Final error: %.6e\n", error);
     printf("========================================\n\n");
 
-    printf("Memory Optimization Impact:\n");
-    printf("  - Kernel fusion: Reduced memory reads by 20%%\n");
-    printf("  - ILP: Hides memory latency with computation\n");
-    printf("  - Fewer blocks: Less scheduling overhead\n");
-    printf("  - Coalesced access: Better cache utilization\n");
+    printf("cuBLAS Impact:\n");
+    printf("  - GEMM is now highly optimized\n");
+    printf("  - Element-wise kernels are simple (no ILP)\n");
+    printf("  - Most time spent in cuBLAS GEMM calls\n");
+    printf("  - Next: L3 adds ILP to element-wise kernels\n");
     printf("========================================\n");
 
     // Return metrics
     *time_ms = elapsed_ms;
     *bandwidth_achieved = bandwidth_gbps;
     *flops_achieved = gflops;
+    *final_error = error;
 
 
     // Cleanup
@@ -315,9 +313,10 @@ void nmf_memory_opt_gpu(float* h_X, int m, int n, int k, int max_iter,
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <matrix_file> <rank_k> <max_iter>\n", argv[0]);
-        printf("Example: %s data/sparse_1000_90.bin 20 100\n", argv[0]);
-        printf("\nGenerate matrix with: python3 data/generate_matrix.py --size 1000 --sparsity 0.9 --output data/sparse_1000_90.bin\n");
+        printf("Usage: %s <matrix_file> <rank_k> <max_iter> [--log-convergence [interval]]\n", argv[0]);
+        printf("Example: %s data/dense_1000.bin 20 100\n", argv[0]);
+        printf("         %s data/dense_1000.bin 20 100 --log-convergence 5\n", argv[0]);
+        printf("\nGenerate matrix with: python3 data/generate_matrix.py --size 1000 --output data/dense_1000.bin\n");
         return 1;
     }
 
@@ -325,9 +324,22 @@ int main(int argc, char** argv) {
     int k = atoi(argv[2]);
     int max_iter = atoi(argv[3]);
 
+    // Parse optional --log-convergence flag
+    bool log_convergence = false;
+    int log_interval = 1;  // Default: log every iteration
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--log-convergence") == 0) {
+            log_convergence = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                log_interval = atoi(argv[i + 1]);
+                i++;
+            }
+        }
+    }
+
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════════╗\n");
-    printf("║       CSE587 NMF - LEVEL 2: MEMORY-OPTIMIZED GPU              ║\n");
+    printf("║       CSE587 NMF - LEVEL 2: cuBLAS GPU (NO ILP)               ║\n");
     printf("╚════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
 
@@ -338,8 +350,9 @@ int main(int argc, char** argv) {
     printf("\n");
 
     // Run memory-optimized GPU NMF
-    float time_ms, bandwidth_gbps, gflops;
-    nmf_memory_opt_gpu(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops);
+    float time_ms, bandwidth_gbps, gflops, final_error;
+    nmf_memory_opt_gpu(h_X, m, n, k, max_iter, &time_ms, &bandwidth_gbps, &gflops,
+                       &final_error, log_convergence, log_interval);
 
     // Save metrics for comparison
     printf("\nSaving metrics to results/memory_opt_metrics.txt...\n");
@@ -352,8 +365,13 @@ int main(int argc, char** argv) {
         fprintf(fp, "Time: %.2f ms\n", time_ms);
         fprintf(fp, "Bandwidth: %.2f GB/s\n", bandwidth_gbps);
         fprintf(fp, "GFLOPS: %.2f\n", gflops);
+        fprintf(fp, "Final_Error: %.6e\n", final_error);
         fclose(fp);
         printf("✓ Metrics saved\n");
+    }
+
+    if (log_convergence) {
+        printf("✓ Convergence log saved to results/convergence_mu_l2.csv\n");
     }
 
     printf("\n");

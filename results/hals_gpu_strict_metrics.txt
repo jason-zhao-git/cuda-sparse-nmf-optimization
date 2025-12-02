@@ -1,0 +1,12 @@
+Version: GPU HALS Strict (Level 1)
+Size: 32000x32000
+Rank: 20
+Iterations: 50
+Time: 811.36 ms
+Time per iteration: 16.23 ms
+Final error: 3.996998e-02
+Bandwidth: 10109.30 GB/s
+GFLOPS: 5054.65
+
+Algorithm: Strict HALS (Gauss-Seidel)
+Parallelism: Single-column (row-wise)
