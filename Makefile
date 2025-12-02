@@ -30,17 +30,18 @@ UTILS = $(SRC_DIR)/utils.cu
 .PHONY: all clean test help levels naive memory-opt compute-opt sparse advanced
 
 # Build all optimization levels (MU + HALS)
-all: naive memory-opt compute-opt multigpu hals
+all: naive memory-opt compute-opt multigpu async-multigpu hals
 	@echo ""
 	@echo "╔════════════════════════════════════════════════════╗"
 	@echo "║         Build Complete!                            ║"
 	@echo "╚════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Built implementations:"
-	@echo "  ✓ MU Naive: Baseline dense GPU"
-	@echo "  ✓ MU L2 Memory: Kernel fusion + 4-way ILP"
-	@echo "  ✓ MU L3 Compute: 8-way ILP + block tuning"
-	@echo "  ✓ MU L4 MultiGPU: Data parallel across GPUs"
+	@echo "  ✓ MU L1 Naive: Custom naive GEMM baseline"
+	@echo "  ✓ MU L2 Memory: cuBLAS + fused kernels"
+	@echo "  ✓ MU L3 Compute: cuBLAS + 8-way ILP"
+	@echo "  ✓ MU L4 MultiGPU: Data parallel, sync every iter"
+	@echo "  ✓ MU L5 Async: Data parallel, configurable sync"
 	@echo "  ✓ HALS CPU: Sequential baseline"
 	@echo "  ✓ HALS GPU Strict: Gauss-Seidel parallelism"
 	@echo "  ✓ HALS GPU Block: Block-parallel with shuffling"
@@ -134,6 +135,20 @@ nmf_multigpu: $(SRC_DIR)/mu/nmf_dense_gpu_v4_multigpu.cu $(UTILS)
 level4: multigpu
 advanced: multigpu
 nmf_advanced: multigpu
+
+# ============================================================================
+# Level 5: Async Multi-GPU with Configurable Sync Interval
+# ============================================================================
+
+async-multigpu: nmf_async_multigpu
+	@echo "✓ Level 5: Async Multi-GPU version built"
+
+nmf_async_multigpu: $(SRC_DIR)/mu/nmf_dense_gpu_v5_async.cu $(UTILS)
+	@echo "Building Level 5: Async Multi-GPU with sync interval..."
+	$(NVCC) $(NVCC_FLAGS) -Xcompiler -fopenmp $^ -o $@ $(LIBS)
+
+# Backwards compatibility
+level5: async-multigpu
 
 nmf_sparse_gpu_v2: $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu $(UTILS)
 	@if [ -f $(SRC_DIR)/nmf_sparse_gpu_v2_optimized.cu ]; then \
@@ -282,7 +297,7 @@ analyze:
 # ============================================================================
 
 clean:
-	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_sparse nmf_advanced
+	rm -f nmf_naive nmf_memory_opt nmf_compute_opt nmf_multigpu nmf_async_multigpu nmf_sparse nmf_advanced
 	rm -f nmf_dense_gpu_v1_naive nmf_dense_gpu_v2_memory nmf_sparse_gpu  # Old names
 	rm -f nmf_dense_gpu nmf_sparse_transpose nmf_sparse_hybrid  # Aliases
 	rm -f nmf_hals_cpu nmf_hals_gpu_strict nmf_hals_gpu_block  # HALS implementations
