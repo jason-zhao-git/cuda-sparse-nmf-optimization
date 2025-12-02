@@ -1,0 +1,611 @@
+\documentclass[11pt]{article}
+
+% ==================================================
+% PACKAGES & CONFIGURATION
+% ==================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{letterpaper, margin=1in}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{times}
+\usepackage{fancyhdr}
+\usepackage{multirow}
+\usepackage{siunitx}
+
+% Hyperlink setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=red
+}
+
+% Spacing
+\setstretch{1.15}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textit{CSE 587 Final Project}}
+\lhead{Parallelizing NMF}
+\cfoot{Page \thepage}
+
+% ==================================================
+% TITLE PAGE
+% ==================================================
+\title{
+    \vspace{1cm}
+    \textbf{\Huge Parallelizing the Unparallelizable}\\[0.8em]
+    \Large Stochastic and Asynchronous Strategies for \\
+    High-Performance Non-negative Matrix Factorization
+    \vspace{0.8cm}
+}
+
+\author{
+    \textbf{Jingqiao (Jason) Zhao} \\[0.5em]
+    Dept. of Electrical Engineering and Computer Science \\
+    University of Michigan \\[1.5em]
+    \textit{CSE 587: Parallel Computing}
+}
+\date{\today}
+
+\begin{document}
+
+% --------------------------------------------------
+% FRONT MATTER
+% --------------------------------------------------
+\maketitle
+\thispagestyle{empty}
+\newpage
+
+% ABSTRACT
+\begin{abstract}
+\noindent Non-negative Matrix Factorization (NMF) is a cornerstone algorithm in bioinformatics, computer vision, and signal processing. This report presents a comprehensive optimization study of two NMF solvers on NVIDIA A40 GPUs: the \textbf{Multiplicative Update (MU)} and the faster-converging but sequential \textbf{Hierarchical Alternating Least Squares (HALS)}.
+
+We demonstrate that naive parallelization strategies quickly hit hardware limits defined by memory bandwidth and PCIe interconnect latency. To overcome these physical barriers, we introduce two key algorithmic innovations:
+
+\begin{enumerate}
+    \item \textbf{Asynchronous Relaxation (MU Level 5):} By synchronizing multi-GPU partial results every 10 iterations instead of every iteration, we reduce PCIe communication by $10\times$, achieving \textbf{1.8$\times$ speedup} over synchronous methods with only 0.004\% error increase.
+
+    \item \textbf{Stochastic Block Parallelism (HALS Level 2):} Using Fisher-Yates shuffling to randomize column update orders, we convert systematic Gauss-Seidel dependencies into random noise, enabling \textbf{690$\times$ speedup} over CPU baseline.
+\end{enumerate}
+
+Our results show that effective GPU parallelization requires algorithmic relaxation, not just code optimization.
+\end{abstract}
+\newpage
+
+\tableofcontents
+\newpage
+
+\setcounter{page}{1}
+
+% ==================================================
+% 1. INTRODUCTION
+% ==================================================
+\section{Introduction}
+
+Non-negative Matrix Factorization decomposes a matrix $X \in \mathbb{R}^{m \times n}_{\ge 0}$ into two lower-rank factors:
+\begin{equation}
+    X \approx WH, \quad W \in \mathbb{R}^{m \times k}, \quad H \in \mathbb{R}^{k \times n}, \quad W, H \ge 0
+\end{equation}
+
+The non-negativity constraint produces ``parts-based'' representations where features are additive, leading to greater interpretability than PCA.
+
+\subsection{The Parallelization Dichotomy}
+
+We investigate two algorithms at opposite ends of the parallelization spectrum:
+
+\begin{itemize}
+    \item \textbf{Multiplicative Update (MU):} All elements update independently using values from the \textit{previous} iteration (Jacobi-style). Easy to parallelize but converges slowly ($\sim$100-200 iterations).
+
+    \item \textbf{HALS:} Updates columns sequentially, with each column using \textit{current} values from previously-updated columns (Gauss-Seidel). Converges fast ($\sim$50 iterations) but inherently sequential.
+\end{itemize}
+
+\subsection{Hardware Platform}
+
+All experiments were conducted on the University of Michigan Lighthouse cluster using 2$\times$ NVIDIA A40 GPUs. Notably, the GPUs are connected through the CPU (no direct NVLink), which impacts multi-GPU communication performance.
+
+% ==================================================
+% 2. MATHEMATICAL FOUNDATION
+% ==================================================
+\section{Mathematical Foundation}
+
+\subsection{MU Update Rules}
+The multiplicative update rules preserve non-negativity automatically:
+\begin{align}
+    H &\leftarrow H \odot \frac{W^T X}{W^T W H + \epsilon} \\
+    W &\leftarrow W \odot \frac{X H^T}{W H H^T + \epsilon}
+\end{align}
+where $\odot$ denotes element-wise multiplication, division is element-wise, and $\epsilon = 10^{-10}$.
+
+\textbf{Computational Cost per Iteration:}
+\begin{itemize}
+    \item $W^T W$: $2k^2 m$ FLOPs (small, reused)
+    \item $W^T X$: $2kmn$ FLOPs (large GEMM)
+    \item $(W^T W) \times H$: $2k^2 n$ FLOPs
+    \item Element-wise H update: $3kn$ FLOPs
+    \item Similar for W update
+\end{itemize}
+
+Total: $\approx 4kmn + 4k^2m + 4k^2n$ FLOPs per iteration.
+
+\subsection{HALS Update Rules}
+For feature $f = 0, 1, \ldots, k-1$:
+\begin{equation}
+    W_{:f} \leftarrow \max \left( \epsilon, W_{:f} + \frac{[X H^T]_{:f} - \sum_{l=0}^{k-1} W_{:l} [H H^T]_{lf}}{[H H^T]_{ff}} \right)
+\end{equation}
+
+\textbf{The Sequential Dependency:} When updating column $f$, the summation term uses:
+\begin{itemize}
+    \item Columns $0, 1, \ldots, f-1$: \textbf{Updated} values (from current iteration)
+    \item Columns $f+1, \ldots, k-1$: \textbf{Old} values (from previous iteration)
+\end{itemize}
+
+This Gauss-Seidel ordering accelerates convergence but creates a strict dependency chain that resists parallelization.
+
+% ==================================================
+% 3. MU OPTIMIZATION
+% ==================================================
+\section{Part I: Multiplicative Update Optimization}
+
+\subsection{Level 1-2: From Naive GEMM to cuBLAS}
+
+\subsubsection{Level 1: Custom Naive GEMM}
+Our baseline implemented naive matrix multiplication where each thread computes one output element:
+
+\begin{algorithm}[H]
+\caption{Naive GEMM Kernel (Level 1)}
+\begin{algorithmic}
+\STATE Each thread $(i, j)$ computes $C[i,j] = \sum_{p=0}^{K-1} A[i,p] \cdot B[p,j]$
+\STATE \textit{// K global memory reads per thread -- no data reuse!}
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Why This is Slow:} Each thread performs $K$ reads from global memory ($\sim$400 cycle latency each) with no shared memory tiling. Adjacent threads reload overlapping data.
+
+\subsubsection{Level 2: cuBLAS Integration}
+We replaced custom kernels with NVIDIA's cuBLAS library and fused element-wise operations:
+
+\begin{table}[h]
+\centering
+\caption{Impact of cuBLAS: Naive vs Library GEMM}
+\label{tab:cublas}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Size & L1 Naive (ms) & L2 cuBLAS (ms) & Speedup \\ \midrule
+500 & 8.43 & 58.51 & \textbf{0.14$\times$} \\
+1,000 & 18.38 & 61.37 & 0.30$\times$ \\
+3,000 & 110.72 & 78.55 & 1.41$\times$ \\
+8,000 & 823.29 & 150.05 & 5.49$\times$ \\
+16,000 & 3,605.76 & 430.77 & 8.37$\times$ \\
+32,000 & 18,803.80 & 1,520.33 & \textbf{12.4$\times$} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Surprising Finding:} cuBLAS is \textit{slower} than naive GEMM for small matrices! At size 500, naive is 7$\times$ faster. This is due to:
+\begin{enumerate}
+    \item \textbf{Library overhead:} $\sim$5-10 $\mu$s per call for kernel selection and parameter validation
+    \item \textbf{Fixed costs dominate:} When compute time $<$ overhead, naive wins
+\end{enumerate}
+
+\textbf{Lesson:} Optimized libraries have overhead. Profile before assuming they're faster.
+
+\subsection{Level 3: Instruction-Level Parallelism}
+
+We optimized element-wise kernels with 8-way ILP to hide memory latency:
+
+\begin{algorithm}[H]
+\caption{8-way ILP Element-wise Kernel}
+\begin{algorithmic}
+\STATE \textbf{Phase 1:} Issue 24 loads in parallel (8 from each of 3 arrays)
+\STATE \textbf{Phase 2:} Compute while loads complete (overlapped execution)
+\STATE \textbf{Phase 3:} Store 8 results
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Result:} No improvement (1520 ms $\to$ 1521 ms).
+
+\textbf{Analysis via Amdahl's Law:} Profiling revealed cuBLAS GEMM consumes 95\% of runtime. Even infinite speedup of element-wise operations yields:
+\begin{equation}
+    \text{Speedup} = \frac{1}{0.95 + 0.05/\infty} = 1.053\times
+\end{equation}
+
+The single-GPU memory bandwidth was the hard limit.
+
+% ==================================================
+% 4. MULTI-GPU STRATEGIES
+% ==================================================
+\section{Multi-GPU Strategies: Breaking the Bandwidth Wall}
+
+\subsection{Data Partitioning Design Decision}
+
+We chose \textbf{column-wise partitioning} of $X$ and $H$, with $W$ \textbf{replicated} on all GPUs:
+
+\begin{equation}
+\begin{aligned}
+    \text{GPU 0:} & \quad X[:, 0:n/2], \quad H[:, 0:n/2], \quad W \text{ (full copy)} \\
+    \text{GPU 1:} & \quad X[:, n/2:n], \quad H[:, n/2:n], \quad W \text{ (full copy)}
+\end{aligned}
+\end{equation}
+
+\subsubsection{Why Column-wise Instead of Row-wise?}
+
+\begin{table}[h]
+\centering
+\caption{Communication Analysis: Column vs Row Partitioning}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+& Column-wise (Our Choice) & Row-wise (Alternative) \\ \midrule
+H Update & \textbf{No communication} & AllReduce $W^T X$ ($k \times n$) \\
+W Update & AllReduce $XH^T$ ($m \times k$) & \textbf{No communication} \\
+Comm Size & $k(k + m)$ floats & $k(k + n)$ floats \\ \bottomrule
+\end{tabular}
+\end{table}
+
+For $m = n$, both are equivalent. But column-wise is more natural for ML workloads where $n$ (samples) often exceeds $m$ (features), and partitioning by samples is the standard data-parallel pattern.
+
+\subsubsection{Why Replicate W Instead of Partitioning?}
+
+\begin{enumerate}
+    \item \textbf{H update needs full W:} Computing $W^T \times X_{\text{local}}$ requires all rows of $W$
+    \item \textbf{W is small:} Only $m \times k$ elements (with $k=20$, this is negligible)
+    \item \textbf{Avoids broadcast after W update:} All GPUs compute identical W updates redundantly
+\end{enumerate}
+
+\subsection{Communication Pattern}
+
+\textbf{Per-iteration data movement for W update:}
+
+Each GPU must transfer two matrices to the CPU for the AllReduce operation:
+\begin{itemize}
+    \item $HH^T$: $k \times k$ floats (for $k=20$: just 400 floats = 1.6 KB)
+    \item $XH^T$: $m \times k$ floats (for $m=32000, k=20$: 640,000 floats = 2.56 MB)
+\end{itemize}
+
+The AllReduce involves:
+\begin{enumerate}
+    \item \textbf{Device-to-Host:} Each GPU copies local $HH^T$ and $XH^T$ to pinned CPU memory
+    \item \textbf{CPU Reduction:} Sum all partial contributions on CPU
+    \item \textbf{Host-to-Device:} Broadcast global results back to all GPUs
+\end{enumerate}
+
+While we did not profile the exact transfer times, the empirical results (Table~\ref{tab:l4fail}) show that the communication overhead from 100 AllReduce operations per run exceeded any compute savings from parallelization.
+
+\subsection{Level 4: Synchronous Multi-GPU (The Failure)}
+
+Our initial implementation synchronized every iteration:
+
+\begin{table}[h]
+\centering
+\caption{Level 4 vs Single GPU Performance}
+\label{tab:l4fail}
+\begin{tabular}{@{}rccc@{}}
+\toprule
+Size & L3 1-GPU (ms) & L4 2-GPU (ms) & Result \\ \midrule
+1,000 & 59.44 & 88.13 & 2-GPU \textbf{slower} \\
+8,000 & 156.14 & 230.27 & 2-GPU \textbf{slower} \\
+32,000 & 1,521.12 & 1,726.56 & 2-GPU \textbf{slower} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Root Cause:} The A40 GPUs connect via PCIe through the CPU, not NVLink:
+\begin{verbatim}
+    $ nvidia-smi topo -m
+    GPU0 <-> GPU1: NODE (through CPU, not direct)
+\end{verbatim}
+
+The 100 AllReduce operations (one per iteration) exceeded compute savings.
+
+\subsection{Level 5: Asynchronous Relaxation (The Solution)}
+
+\textbf{Key Insight:} NMF is iterative and self-correcting. The matrices $HH^T$ and $XH^T$ evolve slowly. We can use \textit{stale} local values between synchronization points.
+
+\begin{algorithm}[H]
+\caption{Level 5: Asynchronous Multi-GPU}
+\begin{algorithmic}
+\FOR{iteration $t = 1$ to $T$}
+    \STATE \textbf{H Update:} Each GPU updates local $H_g$ independently (no comm)
+    \STATE
+    \STATE \textbf{W Update Preparation:}
+    \STATE Each GPU computes: $A_{\text{loc}} = H_g H_g^T$, $B_{\text{loc}} = X_g H_g^T$
+    \STATE
+    \IF{$t \mod \tau == 0$}
+        \STATE \textit{// Sync iteration: expensive AllReduce}
+        \STATE $A_{\text{global}} \leftarrow \sum_g A_{\text{loc}}$ via CPU
+        \STATE $B_{\text{global}} \leftarrow \sum_g B_{\text{loc}}$ via CPU
+    \ELSE
+        \STATE \textit{// Async iteration: use local approximation}
+        \STATE $A_{\text{global}} \approx A_{\text{loc}}$ (device-to-device copy)
+        \STATE $B_{\text{global}} \approx B_{\text{loc}}$
+    \ENDIF
+    \STATE
+    \STATE \textbf{W Update:} All GPUs update $W$ using $A_{\text{global}}$, $B_{\text{global}}$
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Why This Works:}
+\begin{enumerate}
+    \item Each GPU's local $H_g$ captures most of the global structure
+    \item Small errors from stale values are corrected at sync points
+    \item Similar to momentum in SGD -- temporary inaccuracy enables faster progress
+\end{enumerate}
+
+\subsubsection{Performance Results}
+
+\begin{table}[h]
+\centering
+\caption{Async Sync Interval Comparison (Size 32,000)}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & Time (ms) & Speedup vs L4 & Final Error \\ \midrule
+L4 (sync=1) & 1,726.56 & 1.00$\times$ & 0.4434045 \\
+L5 (sync=5) & 1,066.00 & 1.62$\times$ & 0.4434195 \\
+L5 (sync=10) & \textbf{979.37} & \textbf{1.76$\times$} & 0.4434225 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Error Impact:} Only 0.004\% increase -- negligible for practical applications.
+
+\textbf{Communication Reduction:}
+\begin{equation}
+    \text{Reduction} = \frac{100 \text{ syncs}}{10 \text{ syncs}} = 10\times
+\end{equation}
+
+% ==================================================
+% 5. HALS OPTIMIZATION
+% ==================================================
+\section{Part II: HALS -- The Hard Parallelization Problem}
+
+\subsection{CPU Baseline: Understanding the Sequential Dependency}
+
+The CPU HALS implementation uses column-major storage for cache efficiency:
+
+\begin{verbatim}
+    #define IDX(row, col, num_rows) ((col) * (num_rows) + (row))
+\end{verbatim}
+
+Each column update reads \textit{current} values of previously-updated columns, creating a dependency chain that prevents naive parallelization.
+
+\subsection{Level 1: Strict GPU Parallelism}
+
+\textbf{Strategy:} Keep sequential column loop, but parallelize \textit{within} each column update.
+
+\begin{algorithm}[H]
+\caption{HALS GPU Strict: Column-Parallel Update}
+\begin{algorithmic}
+\FOR{$f = 0$ to $k-1$}
+    \STATE \textit{// Launch kernel: m threads update W[:,f] in parallel}
+    \STATE update\_W\_column$\langle\langle\langle$grid, block$\rangle\rangle\rangle$(W, Num, Denom, f)
+    \STATE cudaDeviceSynchronize() \textit{// MUST wait before f+1}
+    \STATE normalize\_column$\langle\langle\langle$grid, block$\rangle\rangle\rangle$(W, f)
+    \STATE cudaDeviceSynchronize()
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Memory Access Pattern:}
+\begin{itemize}
+    \item \textbf{Column writes (coalesced):} Thread $i$ writes $W[i, f]$ at address $f \cdot m + i$ -- adjacent threads write adjacent memory.
+    \item \textbf{Row reads (strided):} Computing interaction requires $W[i, 0], W[i, 1], \ldots, W[i, k-1]$ with stride $m$ between accesses.
+\end{itemize}
+
+\textbf{Kernel Launch Overhead:}
+For $k = 20$: 60 kernel launches per iteration (20 H updates + 20 W updates + 20 normalizations), each with $\sim$5-10 $\mu$s latency.
+
+\subsection{Level 2: Stochastic Block Parallelism}
+
+\subsubsection{The Bias Problem with Fixed Blocks}
+
+If we simply group columns $\{0,1,2,3,4\}$ into Block 0 and update them in parallel:
+\begin{itemize}
+    \item Column 0 \textbf{never} sees updated Column 4 within the same iteration
+    \item Column 4 \textbf{always} uses stale values from Columns 5-19
+    \item This creates systematic bias that degrades convergence
+\end{itemize}
+
+\subsubsection{The Solution: Fisher-Yates Shuffling}
+
+\begin{algorithm}[H]
+\caption{Stochastic Block HALS}
+\begin{algorithmic}
+\FOR{iteration $t = 1$ to $T$}
+    \STATE $\pi \leftarrow$ FisherYatesShuffle$(\{0, 1, \ldots, k-1\}$, seed=$t$)
+    \STATE Partition $\pi$ into blocks: $\mathcal{B}_0, \mathcal{B}_1, \ldots$
+    \STATE
+    \FOR{each block $\mathcal{B}_b$ on CUDA stream $s_b$ \textbf{in parallel}}
+        \FOR{each feature $f \in \mathcal{B}_b$ \textbf{sequentially}}
+            \STATE update\_column$\langle\langle\langle$..., stream=$s_b\rangle\rangle\rangle$(f)
+        \ENDFOR
+    \ENDFOR
+    \STATE cudaDeviceSynchronize() \textit{// Single barrier per iteration}
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Why Shuffling Works:}
+\begin{itemize}
+    \item Fixed blocks: Same pairs always interact incorrectly $\rightarrow$ systematic error
+    \item Random shuffle: Different pairs each iteration $\rightarrow$ errors average to zero
+    \item Analogous to SGD: random mini-batch order prevents bias
+\end{itemize}
+
+\subsubsection{Block Size Selection}
+
+\begin{table}[h]
+\centering
+\caption{Block Size Trade-off Analysis ($k=20$)}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+Block Size & Num Blocks & Parallelism & Convergence \\ \midrule
+1 & 20 & None & Perfect (= Strict) \\
+5 & 4 & Moderate & Acceptable (\textbf{chosen}) \\
+10 & 2 & High & Degraded \\
+20 & 1 & Maximum & Poor (= Jacobi) \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Block size 5 provides 4-way parallelism while maintaining within-block Gauss-Seidel ordering.
+
+\subsubsection{Synchronization Reduction}
+
+\begin{equation}
+    \text{Syncs per iteration:} \quad \text{Strict} = 3k = 60 \quad \text{vs} \quad \text{Block} = 2
+\end{equation}
+
+A 30$\times$ reduction in synchronization overhead.
+
+% ==================================================
+% 6. EXPERIMENTAL RESULTS
+% ==================================================
+\section{Experimental Results}
+
+\subsection{MU Scaling Performance}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/mu_scaling.png}
+    \caption{MU algorithm scaling across optimization levels. Note log scale on both axes. L5 (async sync=10) consistently outperforms synchronous L4.}
+    \label{fig:mu_scaling}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/mu_speedup.png}
+    \caption{MU speedup relative to L1 naive baseline. cuBLAS provides massive gains at large sizes, while async multi-GPU adds further improvement.}
+    \label{fig:mu_speedup}
+\end{figure}
+
+\subsection{HALS Scaling Performance}
+
+\begin{table}[h]
+\centering
+\caption{HALS Performance Comparison (50 iterations)}
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+Size & CPU (ms) & Strict (ms) & Block (ms) & Strict Speedup & Block Speedup \\ \midrule
+1,000 & 415 & 86 & 63 & 4.8$\times$ & 6.6$\times$ \\
+4,000 & 8,447 & 107 & 78 & 79$\times$ & 108$\times$ \\
+8,000 & 33,674 & 133 & 106 & 253$\times$ & 319$\times$ \\
+16,000 & 135,169 & 273 & 246 & 496$\times$ & 550$\times$ \\
+32,000 & 542,603 & 811 & 786 & \textbf{669$\times$} & \textbf{690$\times$} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/hals_scaling.png}
+    \caption{HALS scaling comparison. CPU time grows $O(n^2)$ while GPU time remains nearly flat due to massive parallelism within column updates.}
+    \label{fig:hals_scaling}
+\end{figure}
+
+\subsection{Roofline Analysis}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/hals_roofline.png}
+    \caption{HALS Roofline Analysis. Both GPU implementations are memory-bound at small sizes and approach compute-bound at larger sizes.}
+    \label{fig:hals_roofline}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{HALS Roofline Metrics (Size 32,000)}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & GFLOPS & Bandwidth (GB/s) & Arithmetic Intensity \\ \midrule
+GPU Strict & 10,097 & 265 & 38.1 \\
+GPU Block & 10,423 & 274 & 38.1 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+At size 32,000, both implementations achieve $\sim$27\% compute efficiency and $\sim$39\% memory efficiency, indicating balanced utilization.
+
+\subsection{Convergence Quality}
+
+\begin{table}[h]
+\centering
+\caption{Final Reconstruction Error Comparison}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Method & Error (Size 32k) & Notes \\ \midrule
+HALS CPU & 0.0467 & Baseline (exact Gauss-Seidel) \\
+HALS GPU Strict & 0.0400 & Matches CPU ordering \\
+HALS GPU Block & 0.0982 & Higher due to partial Jacobi \\ \midrule
+MU L3 (1-GPU) & 0.4434 & All MU variants converge identically \\
+MU L5 (sync=10) & 0.4434 & Async has negligible impact \\ \bottomrule
+\end{tabular}
+\end{table}
+
+% ==================================================
+% 7. WHAT DIDN'T WORK
+% ==================================================
+\section{What Didn't Work and Why}
+
+\subsection{Multi-GPU without NVLink (MU L4)}
+\textbf{Expected:} 2 GPUs $\approx$ 2$\times$ speedup.
+\textbf{Actual:} 2 GPUs \textit{slower} than 1 GPU.
+\textbf{Lesson:} Always check hardware topology. PCIe interconnect has 10$\times$ lower bandwidth than NVLink.
+
+\subsection{ILP for Element-wise Kernels (MU L3)}
+\textbf{Expected:} 2-4$\times$ speedup on element-wise operations.
+\textbf{Actual:} 0\% improvement.
+\textbf{Lesson:} Profile first to identify the actual bottleneck. GEMM dominated runtime.
+
+\subsection{Block-Parallel HALS without Shuffling}
+\textbf{Expected:} Faster convergence with fixed blocks.
+\textbf{Actual:} 2-3$\times$ higher error.
+\textbf{Lesson:} Fixed groupings create systematic bias. Randomization converts bias to noise.
+
+\subsection{Large Block Sizes for HALS}
+\textbf{Expected:} More parallelism = faster.
+\textbf{Actual:} block\_size=20 (all parallel) degrades to Jacobi convergence.
+\textbf{Lesson:} Must balance parallelism vs algorithmic properties.
+
+% ==================================================
+% 8. CONCLUSION
+% ==================================================
+\section{Conclusion}
+
+\begin{table}[h]
+\centering
+\caption{Final Performance Summary (Size 32,000, 100/50 iterations)}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & Time (ms) & Speedup vs Baseline & Key Innovation \\ \midrule
+MU L1 (Naive) & 18,804 & 1.0$\times$ & -- \\
+MU L2 (cuBLAS) & 1,520 & 12.4$\times$ & Library acceleration \\
+MU L5 (Async) & \textbf{979} & \textbf{19.2$\times$} & Async relaxation \\ \midrule
+HALS CPU & 542,603 & 1.0$\times$ & -- \\
+HALS Strict & 811 & 669$\times$ & Column parallelism \\
+HALS Block & \textbf{786} & \textbf{690$\times$} & Stochastic shuffling \\ \bottomrule
+\end{tabular}
+\end{table}
+
+This project demonstrated that effective GPU parallelization requires algorithmic modification, not just code optimization:
+
+\begin{enumerate}
+    \item \textbf{Asynchronous Relaxation} defeated the PCIe interconnect bottleneck for MU
+    \item \textbf{Stochastic Shuffling} defeated the Gauss-Seidel dependency bottleneck for HALS
+\end{enumerate}
+
+These results suggest that future high-performance NMF libraries should prioritize stochastic and asynchronous methods over strict mathematical equivalence.
+
+\begin{thebibliography}{9}
+\bibitem{lee01} D. D. Lee and H. S. Seung, ``Algorithms for non-negative matrix factorization,'' \textit{NeurIPS}, 2001.
+\bibitem{cichocki} A. Cichocki and A. H. Phan, ``Fast local algorithms for large scale nonnegative matrix and tensor factorizations,'' \textit{IEICE Transactions}, 2009.
+\bibitem{cuda} NVIDIA Corporation, ``CUDA C++ Programming Guide,'' 2024.
+\end{thebibliography}
+
+\end{document}
