@@ -1,8 +1,9 @@
 Version: Multi-GPU (Level 4)
-Size: 1000x1000
+Size: 32000x32000
 Rank: 20
-Iterations: 50
-GPUs: 1
-Time: 68.66 ms
-Bandwidth: 6.18 GB/s
-GFLOPS: 60.71
+Iterations: 100
+GPUs: 2
+Time: 1726.56 ms
+Final_Error: 4.434045e-01
+Bandwidth: 475.36 GB/s
+GFLOPS: 4750.92

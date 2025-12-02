@@ -1,8 +1,9 @@
 Version: Compute-Optimized GPU (Level 3)
-Size: 1000x1000
+Size: 32000x32000
 Rank: 20
-Iterations: 50
+Iterations: 100
 Block size: 128
-Time: 33.22 ms
-Bandwidth: 12.76 GB/s
-GFLOPS: 125.47
+Time: 1521.12 ms
+Bandwidth: 539.56 GB/s
+GFLOPS: 5392.59
+Final_Error: 4.434044e-01

@@ -1,0 +1,10 @@
+Version: Async Multi-GPU (Level 5)
+Size: 32000x32000
+Rank: 20
+Iterations: 100
+GPUs: 2
+Sync_Interval: 10
+Time: 979.37 ms
+Final_Error: 4.434225e-01
+Bandwidth: 838.02 GB/s
+GFLOPS: 8375.52

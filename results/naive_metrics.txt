@@ -1,7 +1,7 @@
 Version: Naive GPU (Level 1)
-Size: 1000x1000
+Size: 32000x32000
 Rank: 20
-Iterations: 50
-Time: 58.18 ms
-Bandwidth: 7.43 GB/s
-GFLOPS: 71.64
+Iterations: 100
+Time: 18803.80 ms
+Bandwidth: 43.67 GB/s
+GFLOPS: 436.23
