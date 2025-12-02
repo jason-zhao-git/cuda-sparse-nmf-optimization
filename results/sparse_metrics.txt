@@ -1,7 +1,0 @@
-Version: Sparse NMF (Level 3)
-Size: 1000x1000
-Rank: 20
-Iterations: 50
-Time: 55.55 ms
-Bandwidth: 0.72 GB/s
-GFLOPS: 6.55

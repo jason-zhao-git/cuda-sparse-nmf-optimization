@@ -1,6 +1,0 @@
-size,method,time_ms,iterations,time_per_iter_ms,final_error
-500,hals_cpu,118.53,50,2.3706,0
-1000,hals_cpu,412.48,50,8.2496,0
-2000,hals_cpu,1851.95,50,37.0390,0
-4000,hals_cpu,8490.47,50,169.8094,0
-8000,hals_cpu,33812.65,50,676.2530,0
