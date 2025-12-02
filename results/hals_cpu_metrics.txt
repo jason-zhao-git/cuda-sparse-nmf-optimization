@@ -1,10 +1,10 @@
 Version: CPU HALS Sequential Baseline (C++)
-Size: 1000x1000
+Size: 32000x32000
 Rank: 20
-Iterations: 15
-Time: 106.321 ms
-Time per iteration: 7.0881 ms
-Final error: 0.486897
+Iterations: 50
+Time: 542603 ms
+Time per iteration: 10852.1 ms
+Final error: 0.04675
 
 Algorithm: HALS (Hierarchical Alternating Least Squares)
 Update pattern: Gauss-Seidel (sequential feature-wise)
