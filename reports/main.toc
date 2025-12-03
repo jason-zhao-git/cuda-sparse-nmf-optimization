@@ -1,0 +1,21 @@
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}The Parallelization Dichotomy}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Hardware Platform}{1}{subsection.1.2}%
+\contentsline {section}{\numberline {2}Mathematical Foundation}{1}{section.2}%
+\contentsline {subsection}{\numberline {2.1}MU Update Rules}{1}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}HALS Update Rules}{2}{subsection.2.2}%
+\contentsline {section}{\numberline {3}Part I: Singel GPU Multiplicative Update Optimization}{2}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Level 1: Custom Naive GEMM}{2}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Level 2-3: cuBLAS with ILP Element-wise Optimization}{2}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Performance Comparison}{3}{subsection.3.3}%
+\contentsline {section}{\numberline {4}Part II: Multi-GPU Data Parallelism}{3}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Data Partitioning and Communication Strategy}{3}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}From Synchronous Failure to Asynchronous Innovation}{5}{subsection.4.2}%
+\contentsline {section}{\numberline {5}Part III: HALS -- Parallelizing the Unparallelizable}{6}{section.5}%
+\contentsline {subsection}{\numberline {5.1}The Sequential Dependency Problem}{6}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Level 1: Strict Parallelism Within Columns}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Level 2: Breaking the Dependency with Stochastic Block Parallelism}{7}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Comprehensive HALS Performance Results}{8}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Visual Summary}{9}{section.6}%
+\contentsline {section}{\numberline {7}Lessons Learned: What Didn't Work}{12}{section.7}%
+\contentsline {section}{\numberline {8}Conclusion}{12}{section.8}%
