@@ -39,7 +39,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \rhead{\textit{CSE 587 Final Project}}
-\lhead{Parallelizing NMF}
+\lhead{GPU-Accelerated NMF}
 \cfoot{Page \thepage}
 
 % ==================================================
@@ -47,15 +47,15 @@
 % ==================================================
 \title{
     \vspace{1cm}
-    \textbf{\Huge Parallelizing the Unparallelizable}\\[0.8em]
+    \textbf{\Huge GPU-Accelerated Non-negative Matrix Factorization}\\[0.8em]
     \Large Stochastic and Asynchronous Strategies for \\
-    High-Performance Non-negative Matrix Factorization
+    High-Performance NMF on NVIDIA GPUs
     \vspace{0.8cm}
 }
 
 \author{
     \textbf{Jingqiao (Jason) Zhao} \\[0.5em]
-    Dept. of Electrical Engineering and Computer Science \\
+    Depart. of Computational Medicine and Bioinformatics \\
     University of Michigan \\[1.5em]
     \textit{CSE 587: Parallel Computing}
 }
@@ -66,9 +66,9 @@
 % --------------------------------------------------
 % FRONT MATTER
 % --------------------------------------------------
+\pagenumbering{roman}
 \maketitle
 \thispagestyle{empty}
-\newpage
 
 % ABSTRACT
 \begin{abstract}
@@ -89,7 +89,7 @@ Our results show that effective GPU parallelization requires algorithmic relaxat
 \tableofcontents
 \newpage
 
-\setcounter{page}{1}
+\pagenumbering{arabic}
 
 % ==================================================
 % 1. INTRODUCTION

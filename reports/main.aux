@@ -1,19 +1,5 @@
 \relax 
 \providecommand\hyper@newdestlabel[2]{}
-\providecommand\HyperFirstAtBeginDocument{\AtBeginDocument}
-\HyperFirstAtBeginDocument{\ifx\hyper@anchor\@undefined
-\global\let\oldcontentsline\contentsline
-\gdef\contentsline#1#2#3#4{\oldcontentsline{#1}{#2}{#3}}
-\global\let\oldnewlabel\newlabel
-\gdef\newlabel#1#2{\newlabelxx{#1}#2}
-\gdef\newlabelxx#1#2#3#4#5#6{\oldnewlabel{#1}{{#2}{#3}}}
-\AtEndDocument{\ifx\hyper@anchor\@undefined
-\let\contentsline\oldcontentsline
-\let\newlabel\oldnewlabel
-\fi}
-\fi}
-\global\let\hyper@last\relax 
-\gdef\HyperFirstAtBeginDocument#1{#1}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
@@ -24,44 +10,45 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.2}HALS Update Rules}{2}{subsection.2.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {3}Part I: Singel GPU Multiplicative Update Optimization}{2}{section.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Level 1: Custom Naive GEMM}{2}{subsection.3.1}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Naive GEMM Kernel (Level 1)\relax }}{2}{algorithm.1}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Naive GEMM Kernel (Level 1)}}{2}{algorithm.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Level 2-3: cuBLAS with ILP Element-wise Optimization}{2}{subsection.3.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces L2: cuBLAS + Fused Kernel\relax }}{3}{algorithm.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces L3: cuBLAS + 8-way ILP Kernel\relax }}{3}{algorithm.3}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces L2: cuBLAS + Fused Kernel}}{3}{algorithm.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces L3: cuBLAS + 8-way ILP Kernel}}{3}{algorithm.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Performance Comparison}{3}{subsection.3.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Single-GPU MU Performance: Naive vs cuBLAS vs cuBLAS+ILP\relax }}{3}{table.caption.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Single-GPU MU Performance: Naive vs cuBLAS vs cuBLAS+ILP}}{3}{table.caption.2}\protected@file@percent }
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{tab:mu_single}{{1}{3}{Single-GPU MU Performance: Naive vs cuBLAS vs cuBLAS+ILP\relax }{table.caption.2}{}}
+\newlabel{tab:mu_single}{{1}{3}{Single-GPU MU Performance: Naive vs cuBLAS vs cuBLAS+ILP}{table.caption.2}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {4}Part II: Multi-GPU Data Parallelism}{3}{section.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Data Partitioning and Communication Strategy}{3}{subsection.4.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Communication Analysis: Column vs Row Partitioning\relax }}{4}{table.caption.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Communication Analysis: Column vs Row Partitioning}}{4}{table.caption.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}From Synchronous Failure to Asynchronous Innovation}{5}{subsection.4.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Level 4 Synchronous Multi-GPU: 2 GPUs Slower Than 1\relax }}{5}{table.caption.4}\protected@file@percent }
-\newlabel{tab:l4fail}{{3}{5}{Level 4 Synchronous Multi-GPU: 2 GPUs Slower Than 1\relax }{table.caption.4}{}}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces Level 5: Asynchronous Multi-GPU MU (Our Innovation)\relax }}{5}{algorithm.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Comprehensive Multi-GPU Performance Comparison\relax }}{6}{table.caption.5}\protected@file@percent }
-\newlabel{tab:multigpu_full}{{4}{6}{Comprehensive Multi-GPU Performance Comparison\relax }{table.caption.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Level 4 Synchronous Multi-GPU: 2 GPUs Slower Than 1}}{5}{table.caption.4}\protected@file@percent }
+\newlabel{tab:l4fail}{{3}{5}{Level 4 Synchronous Multi-GPU: 2 GPUs Slower Than 1}{table.caption.4}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces Level 5: Asynchronous Multi-GPU MU (Our Innovation)}}{5}{algorithm.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Comprehensive Multi-GPU Performance Comparison}}{6}{table.caption.5}\protected@file@percent }
+\newlabel{tab:multigpu_full}{{4}{6}{Comprehensive Multi-GPU Performance Comparison}{table.caption.5}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {5}Part III: HALS -- Parallelizing the Unparallelizable}{6}{section.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}The Sequential Dependency Problem}{6}{subsection.5.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Level 1: Strict Parallelism Within Columns}{7}{subsection.5.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces HALS GPU Strict: Preserve Sequential Ordering\relax }}{7}{algorithm.5}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces HALS GPU Strict: Preserve Sequential Ordering}}{7}{algorithm.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Level 2: Breaking the Dependency with Stochastic Block Parallelism}{7}{subsection.5.3}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces HALS GPU Block: Stochastic Parallelism (Our Innovation)\relax }}{8}{algorithm.6}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Block Size Analysis ($k=20$): Parallelism vs Convergence Quality\relax }}{8}{table.caption.6}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces HALS GPU Block: Stochastic Parallelism (Our Innovation)}}{8}{algorithm.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Block Size Analysis ($k=20$): Parallelism vs Convergence Quality}}{8}{table.caption.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Comprehensive HALS Performance Results}{8}{subsection.5.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces HALS Performance: CPU vs GPU Strict vs GPU Block (50 iterations)\relax }}{9}{table.caption.7}\protected@file@percent }
-\newlabel{tab:hals_full}{{6}{9}{HALS Performance: CPU vs GPU Strict vs GPU Block (50 iterations)\relax }{table.caption.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces HALS Performance: CPU vs GPU Strict vs GPU Block (50 iterations)}}{9}{table.caption.7}\protected@file@percent }
+\newlabel{tab:hals_full}{{6}{9}{HALS Performance: CPU vs GPU Strict vs GPU Block (50 iterations)}{table.caption.7}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {6}Visual Summary}{9}{section.6}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textbf  {MU Scaling.} Execution time vs matrix size for all MU optimization levels. The naive L1 implementation grows rapidly with size, while cuBLAS-based methods (L2/L3) scale efficiently. Async multi-GPU (L5) achieves the best performance at large sizes.\relax }}{10}{figure.caption.8}\protected@file@percent }
-\newlabel{fig:mu_scaling}{{1}{10}{\textbf {MU Scaling.} Execution time vs matrix size for all MU optimization levels. The naive L1 implementation grows rapidly with size, while cuBLAS-based methods (L2/L3) scale efficiently. Async multi-GPU (L5) achieves the best performance at large sizes.\relax }{figure.caption.8}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces \textbf  {MU Speedup.} Speedup relative to the naive L1 baseline. cuBLAS provides up to 12$\times $ speedup on a single GPU, while async multi-GPU (L5 sync=10) achieves 19$\times $ at size 32,000.\relax }}{10}{figure.caption.9}\protected@file@percent }
-\newlabel{fig:mu_speedup}{{2}{10}{\textbf {MU Speedup.} Speedup relative to the naive L1 baseline. cuBLAS provides up to 12$\times $ speedup on a single GPU, while async multi-GPU (L5 sync=10) achieves 19$\times $ at size 32,000.\relax }{figure.caption.9}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces \textbf  {HALS Scaling.} CPU time grows quadratically ($O(n^2)$) while GPU time remains nearly constant, leading to dramatic speedups at large sizes. At 32,000$\times $32,000, both GPU variants are $\sim $700$\times $ faster than CPU.\relax }}{11}{figure.caption.10}\protected@file@percent }
-\newlabel{fig:hals_scaling}{{3}{11}{\textbf {HALS Scaling.} CPU time grows quadratically ($O(n^2)$) while GPU time remains nearly constant, leading to dramatic speedups at large sizes. At 32,000$\times $32,000, both GPU variants are $\sim $700$\times $ faster than CPU.\relax }{figure.caption.10}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces \textbf  {HALS Roofline Analysis.} Both GPU implementations achieve balanced utilization: $\sim $27\% of peak compute (10 TFLOPS) and $\sim $38\% of peak memory bandwidth (265 GB/s), indicating efficient use of hardware resources.\relax }}{11}{figure.caption.11}\protected@file@percent }
-\newlabel{fig:hals_roofline}{{4}{11}{\textbf {HALS Roofline Analysis.} Both GPU implementations achieve balanced utilization: $\sim $27\% of peak compute (10 TFLOPS) and $\sim $38\% of peak memory bandwidth (265 GB/s), indicating efficient use of hardware resources.\relax }{figure.caption.11}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textbf  {MU Scaling.} Execution time vs matrix size for all MU optimization levels. The naive L1 implementation grows rapidly with size, while cuBLAS-based methods (L2/L3) scale efficiently. Async multi-GPU (L5) achieves the best performance at large sizes.}}{10}{figure.caption.8}\protected@file@percent }
+\newlabel{fig:mu_scaling}{{1}{10}{\textbf {MU Scaling.} Execution time vs matrix size for all MU optimization levels. The naive L1 implementation grows rapidly with size, while cuBLAS-based methods (L2/L3) scale efficiently. Async multi-GPU (L5) achieves the best performance at large sizes}{figure.caption.8}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces \textbf  {MU Speedup.} Speedup relative to the naive L1 baseline. cuBLAS provides up to 12$\times $ speedup on a single GPU, while async multi-GPU (L5 sync=10) achieves 19$\times $ at size 32,000.}}{10}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:mu_speedup}{{2}{10}{\textbf {MU Speedup.} Speedup relative to the naive L1 baseline. cuBLAS provides up to 12$\times $ speedup on a single GPU, while async multi-GPU (L5 sync=10) achieves 19$\times $ at size 32,000}{figure.caption.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces \textbf  {HALS Scaling.} CPU time grows quadratically ($O(n^2)$) while GPU time remains nearly constant, leading to dramatic speedups at large sizes. At 32,000$\times $32,000, both GPU variants are $\sim $700$\times $ faster than CPU.}}{11}{figure.caption.10}\protected@file@percent }
+\newlabel{fig:hals_scaling}{{3}{11}{\textbf {HALS Scaling.} CPU time grows quadratically ($O(n^2)$) while GPU time remains nearly constant, leading to dramatic speedups at large sizes. At 32,000$\times $32,000, both GPU variants are $\sim $700$\times $ faster than CPU}{figure.caption.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces \textbf  {HALS Roofline Analysis.} Both GPU implementations achieve balanced utilization: $\sim $27\% of peak compute (10 TFLOPS) and $\sim $38\% of peak memory bandwidth (265 GB/s), indicating efficient use of hardware resources.}}{11}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:hals_roofline}{{4}{11}{\textbf {HALS Roofline Analysis.} Both GPU implementations achieve balanced utilization: $\sim $27\% of peak compute (10 TFLOPS) and $\sim $38\% of peak memory bandwidth (265 GB/s), indicating efficient use of hardware resources}{figure.caption.11}{}}
 \bibcite{lee01}{1}
 \bibcite{cichocki}{2}
 \bibcite{cuda}{3}
 \@writefile{toc}{\contentsline {section}{\numberline {7}Lessons Learned: What Didn't Work}{12}{section.7}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{12}{section.8}\protected@file@percent }
+\gdef \@abspage@last{14}
