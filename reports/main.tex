@@ -79,10 +79,10 @@ We demonstrate that naive parallelization strategies quickly hit hardware limits
 \begin{enumerate}
     \item \textbf{Asynchronous Relaxation (MU Level 5):} By synchronizing multi-GPU partial results every 10 iterations instead of every iteration, we reduce PCIe communication by $10\times$, achieving \textbf{1.8$\times$ speedup} over synchronous methods with only 0.004\% error increase.
 
-    \item \textbf{Stochastic Block Parallelism (HALS Level 2):} Using Fisher-Yates shuffling to randomize column update orders, we convert systematic Gauss-Seidel dependencies into random noise, enabling \textbf{690$\times$ speedup} over CPU baseline.
+    \item \textbf{Stochastic Block Parallelism (HALS Level 2):} Using Fisher-Yates shuffling to randomize column update orders, we convert systematic Gauss-Seidel dependencies into random parallelizable blocks, enabling \textbf{690$\times$ speedup} over CPU baseline.
 \end{enumerate}
 
-Our results show that effective GPU parallelization requires algorithmic relaxation, not just code optimization.
+Our results show that sometimes effective GPU parallelization requires algorithmic relaxation, not just code optimization.
 \end{abstract}
 \newpage
 
@@ -108,7 +108,7 @@ The non-negativity constraint produces ``parts-based'' representations where fea
 We investigate two algorithms at opposite ends of the parallelization spectrum:
 
 \begin{itemize}
-    \item \textbf{Multiplicative Update (MU):} All elements update independently using values from the \textit{previous} iteration (Jacobi-style). Easy to parallelize but converges slowly ($\sim$100-200 iterations).
+    \item \textbf{Multiplicative Update (MU):} All elements update independently using values from the \textit{previous} iteration (Jacobi-style). Relatively easy to parallelize but converges slowly ($\sim$100-200 iterations).
 
     \item \textbf{HALS:} Updates columns sequentially, with each column using \textit{current} values from previously-updated columns (Gauss-Seidel). Converges fast ($\sim$50 iterations) but inherently sequential.
 \end{itemize}
@@ -290,7 +290,7 @@ The AllReduce involves:
     \item \textbf{Host-to-Device:} Broadcast global results back to all GPUs
 \end{enumerate}
 
-While we did not profile the exact transfer times, the empirical results (Table~\ref{tab:l4fail}) show that the communication overhead from 100 AllReduce operations per run exceeded any compute savings from parallelization.
+While we did not profile the exact transfer times, the empirical results (Table~\ref{tab:l4fail}) show that the communication overhead from AllReduce operations per run exceeded any compute savings from parallelization.
 
 \subsection{From Synchronous Failure to Asynchronous Innovation}
 
@@ -352,7 +352,7 @@ Size & L3 1-GPU & L4 sync=1 & L5 sync=5 & L5 sync=10 & Best Speedup & Error $\De
 \end{tabular}
 \end{table}
 
-The results validate our approach. At small sizes, communication still dominates and even async multi-GPU cannot beat single-GPU. But as matrix size grows, the compute-to-communication ratio improves: at size 8,000, async multi-GPU finally surpasses single-GPU (1.12$\times$), and at size 32,000, we achieve 1.55$\times$ speedup over single-GPU and 1.76$\times$ over synchronous multi-GPU. Crucially, the error impact is negligible---at most 0.76\% at small sizes, dropping to just 0.004\% at large sizes where the local approximation better represents the global structure.
+The results validate our approach. At small sizes, communication still dominates and even async multi-GPU cannot beat single-GPU. But as matrix size grows, the compute-to-communication ratio improves: at size 8,000, async multi-GPU finally surpasses single-GPU (1.12$\times$), and at size 32,000, we achieve 1.55$\times$ speedup over single-GPU and 1.76$\times$ over synchronous multi-GPU. Crucially, the error impact is negligible---at most 0.76\% at small sizes, dropping to just 0.004\% at large sizes.
 
 This asynchronous relaxation strategy is specifically tailored to MU's mathematical properties. Algorithms that require exact intermediate values for correctness or convergence guarantees cannot safely skip synchronization. MU's gradient descent like step-wise, self-correcting updates make it uniquely suitable to this kind of optimization.
 
@@ -471,11 +471,11 @@ Size & CPU (ms) & Strict (ms) & Block (ms) & Strict Speedup & Block Speedup & St
 \end{tabular}
 \end{table}
 
-The speedups are dramatic: at size 32,000, both GPU implementations achieve nearly \textbf{700$\times$} speedup over CPU---transforming a 9-minute computation into just over 800 milliseconds. The Block variant consistently outperforms Strict by 3-10\% due to reduced synchronization overhead (2 barriers vs 60 per iteration).
+The speedups are dramatic: at size 32,000, both GPU implementations achieve nearly \textbf{700$\times$} speedup over CPU---transforming a 9-minute computation into just over 800 milliseconds. The Block variant consistently outperforms Strict by 3-10\% due to reduced synchronization overhead.
 
 \textbf{Why Such Massive Speedups?} The CPU processes rows sequentially within each column, requiring $O(m)$ time per column update. The GPU parallelizes all $m$ rows simultaneously, reducing this to $O(1)$ parallel time (plus kernel launch overhead). As $m$ grows, the GPU's advantage compounds: at $m=32,000$, we parallelize 32,000 independent row operations per column, and the kernel launch overhead becomes negligible relative to the computation.
 
-\textbf{The Error-Speed Trade-off.} The Block variant achieves higher speedup but at a cost: reconstruction error increases from 0.040 (Strict) to 0.098 (Block) at size 32,000. This $\sim$2.5$\times$ error increase is the price of breaking Gauss-Seidel dependencies---some column pairs inevitably use stale values. However, the Fisher-Yates shuffling prevents this error from accumulating systematically, and for many applications (topic modeling, image decomposition, recommender systems), this error level remains acceptable. The choice between Strict and Block depends on the application's tolerance for approximation versus its need for speed.
+\textbf{The Error-Speed Trade-off.} The Block variant achieves higher speedup but at a cost: reconstruction error increases from 0.040 (Strict) to 0.098 (Block) at size 32,000. This $\sim$2.5$\times$ error increase is the price of breaking Gauss-Seidel dependencies---some column pairs inevitably use stale values. However, the Fisher-Yates shuffling prevents this error from accumulating systematically, and for many applications (image decomposition, Single-Cell data decomposition), this error level remains acceptable. The choice between Strict and Block depends on the application's tolerance for approximation versus its need for speed.
 
 The roofline analysis confirms efficient hardware utilization: at size 32,000, GPU Strict achieves 10,097 GFLOPS (27\% of peak compute) and 265 GB/s memory bandwidth (38\% of peak), indicating a balanced workload that effectively saturates both compute and memory subsystems.
 
@@ -530,7 +530,7 @@ The common theme: \textit{na\"ive parallelization either hits hardware limits or
 
 This project reinforced a fundamental lesson: \textit{the bottleneck is rarely where you expect}. Textbook optimizations---tiled GEMM, ILP, data-parallel multi-GPU---fell short because real performance depends on factors outside complexity analysis: library overhead, PCIe topology, and the interaction between algorithmic structure and hardware.
 
-The key insight was that effective parallelization requires \textit{algorithmic relaxation}, not just code optimization. For MU, we exploited tolerance for stale values to reduce synchronization. For HALS, we used randomization to convert systematic Gauss-Seidel dependencies into manageable noise. Both innovations required understanding \textit{why} these algorithms work---what perturbations they tolerate---before knowing \textit{how} to parallelize them safely.
+The key insight was that effective parallelization requires \textit{algorithmic relaxation} in this case, not just code optimization. For MU, we exploited tolerance for stale values to reduce synchronization. For HALS, we used randomization to convert systematic Gauss-Seidel dependencies into random parallelizable blocks. Both innovations required understanding \textit{why} these algorithms work---what perturbations they tolerate---before knowing \textit{how} to parallelize them safely.
 
 The takeaway: profile before optimizing, check hardware topology before scaling, and always ask whether an algorithm's mathematical structure permits your intended parallelization. The fastest code respects both the hardware and the mathematics.
 

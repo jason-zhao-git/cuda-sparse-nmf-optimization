@@ -1,10 +1,10 @@
 # Fdb version 4
-["pdflatex"] 1764787325.64765 "/Users/jzhao/dev/projects/cuda-sparse-nmf-optimization/reports/main.tex" "main.pdf" "main" 1764787326.75315 0
-  "../results/figures/hals_roofline.png" 1764778218.08367 85097 b9ce0bd1f2cc575c706592e62a63f3d7 ""
-  "../results/figures/hals_scaling.png" 1764778218.08422 96080 0e71e59b7673b4c94dc0e27a3e6872c1 ""
-  "../results/figures/mu_scaling.png" 1764778218.08519 160843 6dd382a588b82eaa91e4a2aa2658447e ""
-  "../results/figures/mu_speedup.png" 1764778218.08547 76031 b046d3b57f52167e998a7ffd83036718 ""
-  "/Users/jzhao/dev/projects/cuda-sparse-nmf-optimization/reports/main.tex" 1764787325.41014 33323 e01f69b4f4904a97d09b2069926baf57 ""
+["pdflatex"] 1764825174.72256 "/Users/jzhao/dev/projects/cuda-sparse-nmf-optimization/reports/main.tex" "main.pdf" "main" 1764825175.88308 0
+  "../results/figures/hals_roofline.png" 1764788400.1148 85097 b9ce0bd1f2cc575c706592e62a63f3d7 ""
+  "../results/figures/hals_scaling.png" 1764788400.11534 96080 0e71e59b7673b4c94dc0e27a3e6872c1 ""
+  "../results/figures/mu_scaling.png" 1764788400.11627 160843 6dd382a588b82eaa91e4a2aa2658447e ""
+  "../results/figures/mu_speedup.png" 1764788400.11664 76031 b046d3b57f52167e998a7ffd83036718 ""
+  "/Users/jzhao/dev/projects/cuda-sparse-nmf-optimization/reports/main.tex" 1764825174.48702 33274 3184dfc946de896d8b80e64f7545bad3 ""
   "/usr/local/texlive/2025basic/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2025basic/texmf-dist/fonts/tfm/adobe/courier/pcrr8r.tfm" 1136768653 1292 bd42be2f344128bff6d35d98474adfe3 ""
   "/usr/local/texlive/2025basic/texmf-dist/fonts/tfm/adobe/courier/pcrr8t.tfm" 1136768653 1384 4632f5e54900a7dadbb83f555bc61e56 ""
@@ -132,10 +132,10 @@
   "/usr/local/texlive/2025basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1764780722 79847 c17732f2858711a051be492fc10d3023 ""
   "/usr/local/texlive/2025basic/texmf-var/web2c/pdftex/pdflatex.fmt" 1741448339 2663854 a6f6b8c904d47faabe5d94cfdac61310 ""
   "/usr/local/texlive/2025basic/texmf.cnf" 1741448314 628 81d1ada0f601fb1ffa62f1323192d946 ""
-  "main.aux" 1764787326.69146 8085 01192f6b882ea7c352eb99695994fe55 "pdflatex"
-  "main.out" 1764787326.69244 4719 fa6832480eca86363a01805126565d29 "pdflatex"
-  "main.tex" 1764787325.41014 33323 e01f69b4f4904a97d09b2069926baf57 ""
-  "main.toc" 1764787326.69269 1992 1596068504c7012bc12dde8675e23825 "pdflatex"
+  "main.aux" 1764825175.81594 8085 01192f6b882ea7c352eb99695994fe55 "pdflatex"
+  "main.out" 1764825175.81699 4719 fa6832480eca86363a01805126565d29 "pdflatex"
+  "main.tex" 1764825174.48702 33274 3184dfc946de896d8b80e64f7545bad3 ""
+  "main.toc" 1764825175.81724 1992 1596068504c7012bc12dde8675e23825 "pdflatex"
   (generated)
   "main.aux"
   "main.log"
